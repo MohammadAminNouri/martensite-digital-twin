@@ -90,7 +90,62 @@ def build_markdown_report(
     return "\n".join(lines)
 
 
-def build_json_report(model: TwinModel, metrics: dict, gap_report: GapReport | None = None) -> str:
+def _json_safe(value):
+    """Convert common scientific/Pandas objects into JSON-safe Python types."""
+    try:
+        import numpy as np
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+    except Exception:
+        pass
+    try:
+        import pandas as pd
+        if isinstance(value, pd.DataFrame):
+            return value.to_dict(orient="records")
+        if isinstance(value, pd.Series):
+            return value.to_dict()
+    except Exception:
+        pass
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def build_json_report(
+    model: TwinModel,
+    assignment_summary: pd.DataFrame | dict | None = None,
+    metrics: dict | None = None,
+    gap_report: GapReport | None = None,
+    notes: str = "",
+) -> dict:
+    """Build a JSON-safe report payload.
+
+    v0.5.4 had an interface mismatch: the Streamlit app called this function as
+    build_json_report(model, assignment_summary, metrics, gap_report, notes=...),
+    while the function was still defined as build_json_report(model, metrics, gap_report).
+    This version accepts both call styles and returns a dict that the app can extend
+    before calling json.dumps().
+    """
+    # Backward compatibility: build_json_report(model, metrics, gap_report)
+    if isinstance(assignment_summary, dict) and (metrics is None or isinstance(metrics, GapReport)):
+        if isinstance(metrics, GapReport) and gap_report is None:
+            gap_report = metrics
+        metrics = assignment_summary
+        assignment_summary = None
+
+    metrics = metrics or {}
+    assignment_records = None
+    if assignment_summary is not None:
+        try:
+            if hasattr(assignment_summary, "empty") and not assignment_summary.empty:
+                assignment_records = assignment_summary.to_dict(orient="records")
+        except Exception:
+            assignment_records = str(assignment_summary)
+
     payload = {
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "configuration": asdict(model.config),
@@ -99,10 +154,13 @@ def build_json_report(model: TwinModel, metrics: dict, gap_report: GapReport | N
             "parent_phase": model.orientation_relationship.parent_phase,
             "child_phase": model.orientation_relationship.child_phase,
             "matrix_child_to_parent": model.orientation_relationship.matrix_child_to_parent.tolist(),
-            "source_note": model.orientation_relationship.source_note,
+            "source_note": getattr(model.orientation_relationship, "source_note", ""),
+            "description": getattr(model.orientation_relationship, "description", getattr(model.orientation_relationship, "source_note", model.orientation_relationship.name)),
         },
         "n_variants": len(model.variants),
+        "variant_population_summary": assignment_records,
         "metrics": metrics,
         "gap_report": asdict(gap_report) if gap_report else None,
+        "notes": notes,
     }
-    return json.dumps(payload, indent=2)
+    return _json_safe(payload)
