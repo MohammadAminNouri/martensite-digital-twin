@@ -13,8 +13,8 @@ class GapReport:
 def assess_data_gaps(material_system: str, available: dict[str, bool]) -> GapReport:
     required = {
         "common": ["composition", "heat_treatment", "ebsd_or_tkd"],
-        "niti": ["DSC", "XRD_lattice", "stress_strain", "oxygen_carbon", "thermal_history"],
-        "steel": ["cooling_curve", "prior_austenite_reference", "hardness", "retained_austenite_XRD"],
+        "niti": ["DSC", "XRD_lattice", "XRD_pattern", "EDS_maps", "SEM_images", "TEM_STEM", "stress_strain", "oxygen_carbon", "thermal_history"],
+        "steel": ["cooling_curve", "prior_austenite_reference", "hardness", "retained_austenite_XRD", "SEM_images", "EDS_maps", "XRD_pattern"],
         "lpbf": ["laser_parameters", "scan_strategy", "powder_chemistry", "melt_pool_or_thermal_model", "porosity", "residual_stress"],
     }
     keys = list(required["common"])
@@ -35,8 +35,14 @@ def assess_data_gaps(material_system: str, available: dict[str, bool]) -> GapRep
         rec.append("Run DSC to measure Ms/Mf/As/Af and hysteresis.")
     if "cooling_curve" in missing and "steel" in low:
         rec.append("Record quench/cooling curve or dilatometry trace.")
-    if "XRD_lattice" in missing:
-        rec.append("Measure lattice parameters and retained/parent phase fractions by XRD/synchrotron.")
+    if "XRD_lattice" in missing or "XRD_pattern" in missing:
+        rec.append("Measure/upload XRD or synchrotron diffraction patterns and refine lattice parameters/phase fractions.")
+    if "EDS_maps" in missing:
+        rec.append("Add EDS/WDS chemistry data: Ni/Ti ratio, alloying additions, oxygen/carbon/impurity risk and segregation maps if possible.")
+    if "SEM_images" in missing:
+        rec.append("Add SEM/optical images for morphology, porosity, cracks, melt-pool tracks and correlative context with EBSD.")
+    if "TEM_STEM" in missing:
+        rec.append("Add TEM/STEM/SAED/4D-STEM evidence for nanoscale twins, precipitates, interfaces and local strain.")
     if "thermal_history" in missing or "melt_pool_or_thermal_model" in missing:
         rec.append("Build or measure thermal history; start with Rosenthal/FE thermal model if sensors are absent.")
     if not rec:

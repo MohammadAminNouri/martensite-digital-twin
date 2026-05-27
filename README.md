@@ -1,82 +1,75 @@
-# OpenMartensiteTwin v0.4
+# OpenMartensiteTwin v0.5
 
-A Python-first, evidence-aware scaffold for a comprehensive martensitic-transformation digital twin.
+A Python-first, evidence-aware digital-twin framework for martensitic transformations in NiTi, steels, and future transformation materials.
 
-**Important:** v0.4 is not yet a fully validated industrial twin. It is a clearer, more defensible research platform that separates:
+This repository is **not a black-box AI model** and not yet an industrially validated twin. It is a modular scientific platform that separates:
 
 - crystallographic calculation,
-- measured evidence,
-- synthetic/test data,
-- assumptions,
-- missing validation,
-- exportable reports.
+- experimental evidence,
+- literature-derived assumptions,
+- data gaps,
+- validation status,
+- and future user-supplied measurements.
 
-## What v0.4 adds
+## What v0.5 adds
 
-- A guided Streamlit workflow with explanations for every control, table and graph.
-- Evidence/state-vector tracking for sample, process route, data availability and assumptions.
-- Maturity levels L0–L4 so the app cannot pretend to be more validated than it is.
-- Explicit defensibility gap register: what is implemented, what is missing, and how to close it.
-- Open-source data/tool manifest for MTEX, orix, kikuchipy, pycalphad, OpenPhase, DAMASK and open Zenodo steel datasets.
-- Clear distinction between synthetic data, uploaded data and real calibration evidence.
-- Better variant maps, angular-error maps, kinetics explanations and report exports.
+v0.5 expands the app beyond EBSD/TKD orientation tables and adds a defensible characterization layer:
 
-## Install locally
+- XRD / synchrotron diffraction evidence workspace
+- EDS/WDS chemistry evidence workspace
+- SEM / optical morphology evidence workspace
+- TEM / STEM / SAED / 4D-STEM evidence tracking
+- article-derived missing-data map
+- clearer distinction between literature values and same-sample evidence
+- expanded defensibility gap register
+- updated maturity scoring
+
+The current scientific core still includes:
+
+- NiTi B2→B19′ Cayron-style natural OR prototype
+- steel fcc→bcc/bct KS/NW/Pitsch comparators
+- variant generation and assignment
+- synthetic EBSD-like datasets
+- prototype parent clustering
+- simple kinetics placeholders
+- evidence/state-vector reporting
+
+## Run locally
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e .[app]
+source .venv/bin/activate
+pip install -e .
 streamlit run app/streamlit_app.py
 ```
 
-## Streamlit Cloud
+## Test
 
-Use this as the main file path:
+```bash
+pytest -q
+```
+
+## Current honesty level
+
+v0.5 is a much better research prototype, but it is not yet the final defensible digital twin. The remaining major gaps are:
+
+1. native `.ctf`, `.ang`, `.h5` EBSD/TKD import;
+2. graph-based parent reconstruction comparable to MTEX/ARPGE-style workflows;
+3. OR refinement from measured maps;
+4. validated XRD/Rietveld connector such as GSAS-II;
+5. real DSC/dilatometry fitting;
+6. quantitative EDS/TEM/STEM analysis connectors;
+7. benchmark ingestion for open steel datasets;
+8. raw NiTi EBSD/TKD/DSC/XRD/SEM/EDS/TEM datasets from the same sample;
+9. CALPHAD/phase-field/crystal-plasticity coupling;
+10. independent validation and uncertainty propagation.
+
+## Deployment on Streamlit Cloud
+
+Set the app path to:
 
 ```text
 app/streamlit_app.py
 ```
 
-Do not deploy the old `martensite_twin_v01/app/streamlit_app.py` path.
-
-## Current scientific status
-
-| Layer | Status in v0.4 |
-|---|---|
-| Material/process state vector | partial, usable |
-| Cayron-style NiTi crystallography | prototype |
-| Steel KS/NW/Pitsch crystallography | prototype |
-| CSV EBSD-like import | working |
-| Synthetic EBSD map generation | working, for testing only |
-| Variant assignment | working for known/assumed parent mode |
-| Parent reconstruction | prototype only, not full MTEX/ARPGE graph method |
-| Kinetics | educational KM/NiTi hysteresis placeholders |
-| Thermodynamics | connector stub |
-| Mechanics / phase-field | connector roadmap |
-| Validation/uncertainty | gap-aware reporting, not statistical propagation yet |
-
-## What must be added for a defensible “most comprehensive” twin
-
-1. Real `.ctf`, `.ang`, `.h5` EBSD/TKD import through orix/kikuchipy.
-2. Graph-based parent reconstruction with grain adjacency and OR probability functions.
-3. OR refinement and convention validation against MTEX/ARPGE/AZtec-style examples.
-4. Ingestion scripts for open steel datasets from Zenodo.
-5. A raw NiTi EBSD/TKD/DSC/XRD/mechanical dataset for calibration.
-6. pycalphad thermodynamics with legal database files.
-7. DSC/dilatometry fitting and uncertainty bands.
-8. OpenPhase/DAMASK/MOOSE coupling for phase-field and mechanics.
-9. Independent validation suite and versioned sample database.
-
-## Repository structure
-
-```text
-app/                    Streamlit app
-martwin/                Python scientific core
-martwin/digital_twin/   evidence, maturity and gap logic
-examples/               command-line demos
-data/                   open-data manifests and generated outputs
-docs/                   roadmap and user documentation
-tests/                  basic tests
-scripts/                helper scripts for future data ingestion
-```
+Do not deploy older nested folders such as `martensite_twin_v01/app/streamlit_app.py`.

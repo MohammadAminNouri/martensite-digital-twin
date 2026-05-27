@@ -31,9 +31,11 @@ from martwin.digital_twin.evidence import (
     dataframe,
     maturity_level,
     evidence_table,
+    CHARACTERIZATION_MODULES,
+    ARTICLE_EVIDENCE_MAP,
 )
 
-st.set_page_config(page_title="OpenMartensiteTwin v0.4", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="OpenMartensiteTwin v0.5", layout="wide", initial_sidebar_state="expanded")
 
 
 def css() -> None:
@@ -99,6 +101,50 @@ def make_steel_kinetics_plot(temps: np.ndarray, frac: list[float], Ms: float, al
     return fig
 
 
+def plot_xrd_pattern(xrd_df: pd.DataFrame) -> tuple[plt.Figure, pd.DataFrame]:
+    """Simple XRD preview. This is not a Rietveld refinement."""
+    cols = {c.lower().strip(): c for c in xrd_df.columns}
+    x_col = cols.get("2theta") or cols.get("two_theta") or cols.get("theta") or cols.get("q") or xrd_df.columns[0]
+    y_col = cols.get("intensity") or cols.get("counts") or xrd_df.columns[1]
+    x = pd.to_numeric(xrd_df[x_col], errors="coerce")
+    y = pd.to_numeric(xrd_df[y_col], errors="coerce")
+    clean = pd.DataFrame({"x": x, "intensity": y}).dropna()
+    fig, ax = plt.subplots(figsize=(10.5, 4.2))
+    ax.plot(clean["x"], clean["intensity"], lw=1.2)
+    ax.set_xlabel(str(x_col))
+    ax.set_ylabel(str(y_col))
+    ax.set_title("XRD / diffraction preview: raw pattern, not refinement")
+    ax.grid(True, alpha=0.25)
+    peaks = pd.DataFrame()
+    try:
+        from scipy.signal import find_peaks
+        yy = clean["intensity"].to_numpy(dtype=float)
+        prominence = max(float(np.nanstd(yy)) * 1.5, 1e-9)
+        idx, props = find_peaks(yy, prominence=prominence)
+        if len(idx):
+            peaks = clean.iloc[idx].copy().rename(columns={"x": "peak_position", "intensity": "peak_intensity"})
+            peaks["relative_intensity"] = peaks["peak_intensity"] / max(float(clean["intensity"].max()), 1e-9)
+            ax.scatter(peaks["peak_position"], peaks["peak_intensity"], s=18)
+    except Exception:
+        pass
+    return fig, peaks
+
+
+def normalize_eds_table(eds_df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a simple EDS table with element and wt/at columns."""
+    df = eds_df.copy()
+    lower = {c.lower().strip(): c for c in df.columns}
+    elem_col = lower.get("element") or lower.get("el") or lower.get("symbol") or df.columns[0]
+    at_col = lower.get("at%") or lower.get("at.%") or lower.get("atomic%") or lower.get("atomic_percent")
+    wt_col = lower.get("wt%") or lower.get("wt.%") or lower.get("weight%") or lower.get("weight_percent")
+    out = pd.DataFrame({"element": df[elem_col].astype(str)})
+    if at_col:
+        out["at_percent"] = pd.to_numeric(df[at_col], errors="coerce")
+    if wt_col:
+        out["wt_percent"] = pd.to_numeric(df[wt_col], errors="coerce")
+    return out
+
+
 def init_state() -> None:
     defaults: dict[str, Any] = {
         "ebsd_df": None,
@@ -109,6 +155,11 @@ def init_state() -> None:
         "last_kinetics_df": None,
         "last_report": None,
         "dataset_origin": "none",
+        "xrd_df": None,
+        "xrd_peaks": None,
+        "eds_df": None,
+        "sem_images": [],
+        "tem_images": [],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -150,7 +201,7 @@ with st.sidebar:
         )
         recon_thr = st.slider(
             "Parent reconstruction threshold (°)", 1.0, 15.0, 5.0, 0.5,
-            help="Prototype threshold for grouping candidate parent orientations. Higher merges parent clusters; lower splits them. v0.4 is not yet full MTEX/ARPGE graph reconstruction.",
+            help="Prototype threshold for grouping candidate parent orientations. Higher merges parent clusters; lower splits them. v0.5 is not yet full MTEX/ARPGE graph reconstruction.",
         )
 
     with st.expander("3. Synthetic data controls", expanded=False):
@@ -165,7 +216,12 @@ with st.sidebar:
         composition_known = st.checkbox("composition known", value=False)
         heat_known = st.checkbox("heat treatment / thermal cycle known", value=False)
         dsc_known = st.checkbox("DSC / transformation temperatures available", value=False)
-        xrd_known = st.checkbox("XRD / lattice or phase fractions available", value=False)
+        xrd_known = st.checkbox("XRD refined lattice/phase fractions available", value=False, help="Means you have refined lattice parameters or phase fractions, not only a picture of a pattern.")
+        xrd_pattern_known = st.checkbox("raw XRD/synchrotron pattern uploaded/available", value=False, help="Raw 2θ/q-intensity pattern. Used for phase/lattice validation after peak fitting/refinement.")
+        sem_known = st.checkbox("SEM/optical micrographs available", value=False, help="Morphology, porosity, cracks, melt-pool tracks, etched grain structure, or correlative microstructure context.")
+        eds_known = st.checkbox("EDS/WDS chemistry data available", value=False, help="Element composition, Ni/Ti ratio, impurities, alloying additions, local segregation.")
+        tem_known = st.checkbox("TEM/STEM images available", value=False, help="Nanoscale twins, precipitates, dislocations, habit interfaces, local defects.")
+        tem_diff_known = st.checkbox("TEM/SAED/4D-STEM diffraction available", value=False, help="Local diffraction/orientation/strain evidence at nanoscale.")
         mech_known = st.checkbox("stress-strain / mechanical data available", value=False)
         oxy_known = st.checkbox("oxygen/carbon/impurities known", value=False)
         cooling_known = st.checkbox("cooling curve / dilatometry available", value=False)
@@ -209,6 +265,11 @@ evidence = TwinEvidence(
     ebsd_or_tkd=dataset_available,
     dsc=dsc_known,
     xrd_lattice=xrd_known,
+    xrd_pattern=xrd_pattern_known or (st.session_state.xrd_df is not None),
+    sem_images=sem_known or bool(st.session_state.sem_images),
+    eds_maps=eds_known or (st.session_state.eds_df is not None),
+    tem_stem=tem_known or bool(st.session_state.tem_images),
+    tem_diffraction=tem_diff_known,
     stress_strain=mech_known,
     oxygen_carbon=oxy_known,
     thermal_history=thermal_known,
@@ -226,14 +287,14 @@ evidence = TwinEvidence(
 
 material_key_for_gaps = model.material_key + (" lpbf" if lpbf else "")
 gap_report = assess_data_gaps(material_key_for_gaps, evidence.as_gap_dict())
-has_calibration = dsc_known or xrd_known or cooling_known or mech_known or hardness_known
+has_calibration = dsc_known or xrd_known or xrd_pattern_known or eds_known or cooling_known or mech_known or hardness_known
 has_process = heat_known or bool(heat_note.strip()) or thermal_known or cooling_known or laser_known
-has_validation = parent_ref_known or retained_known or mech_known or hardness_known
+has_validation = parent_ref_known or retained_known or mech_known or hardness_known or sem_known or tem_known
 level, level_note = maturity_level(gap_report.confidence_score, has_dataset, has_calibration, has_process, has_validation)
 
 # Header
-st.title("OpenMartensiteTwin v0.4")
-st.caption("A guided, evidence-aware martensitic-transformation twin. v0.4 is designed to be honest: it separates calculation, evidence, assumptions and missing validation.")
+st.title("OpenMartensiteTwin v0.5")
+st.caption("A guided, evidence-aware martensitic-transformation twin. v0.5 is designed to be honest: it separates calculation, evidence, assumptions and missing validation.")
 
 cols = st.columns(7)
 cols[0].metric("Twin maturity", level.split(" — ")[0])
@@ -257,12 +318,14 @@ TABS = st.tabs([
     "1. Controls explained",
     "2. Evidence/state vector",
     "3. Crystallography",
-    "4. Data workspace",
+    "4. EBSD/TKD workspace",
     "5. Variant & parent analysis",
     "6. Kinetics",
-    "7. Open data/tools",
-    "8. Defensibility gaps",
-    "9. Report/export",
+    "7. XRD/EDS/SEM/TEM",
+    "8. Article-derived gap map",
+    "9. Open data/tools",
+    "10. Defensibility gaps",
+    "11. Report/export",
 ])
 
 with TABS[0]:
@@ -276,7 +339,7 @@ with TABS[0]:
     st.dataframe(layer_df, hide_index=True, use_container_width=True)
     st.markdown("### Fidelity ladder")
     st.dataframe(dataframe(FIDELITY_LEVELS), hide_index=True, use_container_width=True)
-    st.info("The roadmap you gave is correct: the twin must combine Cayron-style crystallography, EBSD/TKD reconstruction, thermodynamics, kinetics, phase-field/mechanics, LPBF/heat-treatment data, uncertainty and reporting. v0.4 makes those layers visible instead of hiding them.")
+    st.info("The roadmap you gave is correct: the twin must combine Cayron-style crystallography, EBSD/TKD reconstruction, XRD/EDS/SEM/TEM/DSC evidence, thermodynamics, kinetics, phase-field/mechanics, LPBF/heat-treatment data, uncertainty and reporting. v0.5 makes those layers visible instead of hiding them.")
 
 with TABS[1]:
     st.header("Every left-panel control: what it means and what it changes")
@@ -305,6 +368,10 @@ with TABS[2]:
         "lpbf_route": lpbf,
         "dataset_origin": st.session_state.dataset_origin,
         "dataset_points": len(st.session_state.ebsd_df) if has_dataset else 0,
+        "xrd_pattern_uploaded": st.session_state.xrd_df is not None,
+        "eds_table_uploaded": st.session_state.eds_df is not None,
+        "sem_image_count": len(st.session_state.sem_images),
+        "tem_image_count": len(st.session_state.tem_images),
         "composition_note": composition_note,
         "heat_treatment_note": heat_note,
         "analyst_notes": analyst_notes,
@@ -347,7 +414,7 @@ with TABS[4]:
     st.header("Data workspace")
     section_help(
         "EBSD/TKD data",
-        "The real value starts when a measured orientation map is loaded. v0.4 supports CSV with either r00…r22 rotation-matrix columns or Bunge Euler angles phi1/Phi/phi2.",
+        "The real value starts when a measured orientation map is loaded. v0.5 supports CSV with either r00…r22 rotation-matrix columns or Bunge Euler angles phi1/Phi/phi2.",
         "The orientation map feeds variant assignment, parent reconstruction, fit-error statistics and report export.",
         "Direct .ctf/.ang/.h5 import is listed as a required v0.5 gap. Use vendor/MTEX/orix export to CSV for now.",
     )
@@ -396,7 +463,7 @@ with TABS[5]:
         "variant assignment",
         "Each measured child orientation is compared with every theoretical variant. The closest variant gets assigned and the angular error is reported.",
         "Low angular error and high in-tolerance fraction support the chosen OR/model; high error suggests wrong OR, wrong convention, noisy data or wrong phase labels.",
-        "The parent reconstruction in v0.4 is exploratory. Full defensible reconstruction needs graph-based topology and OR-probability methods.",
+        "The parent reconstruction in v0.5 is exploratory. Full defensible reconstruction needs graph-based topology and OR-probability methods.",
     )
     if not has_dataset:
         st.info("Load or generate data first.")
@@ -457,7 +524,7 @@ with TABS[6]:
         "kinetics curve",
         "Kinetics connects temperature/cooling/heating history to phase fraction. This is necessary for a true process-aware twin.",
         "The graph is used to compare DSC/dilatometry/XRD phase-fraction data and to estimate phase fraction at a temperature.",
-        "v0.4 kinetics is educational unless you supply measured DSC/dilatometry data and fit parameters.",
+        "v0.5 kinetics is educational unless you supply measured DSC/dilatometry data and fit parameters.",
     )
     if is_niti:
         Ms = st.number_input("Ms: martensite start during cooling (°C)", value=30.0)
@@ -486,6 +553,97 @@ with TABS[6]:
     df_download("Download kinetics curve", kinetics_df, "kinetics_curve.csv")
 
 with TABS[7]:
+    st.header("XRD, EDS, SEM and TEM characterization evidence")
+    section_help(
+        "characterization evidence",
+        "A defensible martensitic-transformation twin cannot rely only on orientation matrices. XRD validates phases/lattice parameters, EDS validates chemistry, SEM validates morphology/defects, and TEM/STEM validates nanoscale twins, precipitates and interfaces.",
+        "These measurements update the sample state vector and reduce uncertainty. In v0.5, XRD/EDS have simple upload previews and SEM/TEM are evidence/metadata workspaces; full scientific refinement is planned through open-source connectors.",
+        "Do not call a plotted XRD curve a phase refinement. Use GSAS-II/MAUD-style Rietveld refinement or a validated connector for publication-grade phase fractions.",
+    )
+    st.subheader("What each characterization module contributes")
+    char_df = dataframe(CHARACTERIZATION_MODULES)
+    st.dataframe(char_df, hide_index=True, use_container_width=True)
+    st.divider()
+
+    xcol, ecol = st.columns(2)
+    with xcol:
+        st.subheader("XRD / diffraction CSV preview")
+        st.caption("Upload columns like `2theta,intensity` or `q,intensity`. This finds visible peaks only; it is not Rietveld refinement.")
+        xrd_upload = st.file_uploader("Upload XRD CSV", type=["csv"], key="xrd_upload")
+        if xrd_upload is not None:
+            try:
+                xdf = pd.read_csv(xrd_upload)
+                fig, peaks = plot_xrd_pattern(xdf)
+                st.session_state.xrd_df = xdf
+                st.session_state.xrd_peaks = peaks
+                st.pyplot(fig)
+                st.write("Detected peak candidates")
+                st.dataframe(peaks.head(30), hide_index=True, use_container_width=True)
+            except Exception as exc:
+                st.error(f"Could not read/plot XRD CSV: {exc}")
+        elif st.session_state.xrd_df is not None:
+            fig, peaks = plot_xrd_pattern(st.session_state.xrd_df)
+            st.pyplot(fig)
+            st.dataframe(peaks.head(30), hide_index=True, use_container_width=True)
+        st.info("How XRD affects the twin: it supplies B2/B19′/R or retained-austenite phase evidence, refined lattice parameters, peak shifts and phase fractions. These values should replace defaults such as the NiTi B19′ beta angle.")
+
+    with ecol:
+        st.subheader("EDS/WDS chemistry table")
+        st.caption("Upload columns like `element,at%` or `element,wt%`. For NiTi, the Ni/Ti atomic ratio is critical.")
+        eds_upload = st.file_uploader("Upload EDS/WDS composition CSV", type=["csv"], key="eds_upload")
+        if eds_upload is not None:
+            try:
+                edf = normalize_eds_table(pd.read_csv(eds_upload))
+                st.session_state.eds_df = edf
+            except Exception as exc:
+                st.error(f"Could not read EDS/WDS CSV: {exc}")
+        if st.session_state.eds_df is not None:
+            edf = st.session_state.eds_df
+            st.dataframe(edf, hide_index=True, use_container_width=True)
+            if "at_percent" in edf.columns:
+                vals = {r.element.strip().lower(): r.at_percent for r in edf.itertuples() if pd.notna(r.at_percent)}
+                ni = vals.get("ni")
+                ti = vals.get("ti")
+                if ni is not None and ti is not None and ti != 0:
+                    st.metric("Ni/Ti atomic ratio", f"{ni/ti:.4f}")
+                    st.caption("In NiTi, small composition differences can shift transformation temperatures. Treat this as a quality-control signal, not a full thermodynamic calculation.")
+        st.info("How EDS affects the twin: chemistry determines CALPHAD inputs, NiTi transformation-temperature risk, powder/as-built differences, impurity risk and local segregation.")
+
+    scol, tcol = st.columns(2)
+    with scol:
+        st.subheader("SEM / optical morphology evidence")
+        sem_files = st.file_uploader("Upload SEM/optical images", type=["png", "jpg", "jpeg", "tif", "tiff"], accept_multiple_files=True, key="sem_upload")
+        if sem_files:
+            st.session_state.sem_images = [f.name for f in sem_files]
+            for f in sem_files[:3]:
+                st.image(f, caption=f"SEM/optical: {f.name}", use_container_width=True)
+        st.caption("SEM/optical images are used for morphology, porosity/cracks, melt-pool tracks, etched PAG comparison and sanity-checking EBSD-derived maps. Automated segmentation is planned.")
+    with tcol:
+        st.subheader("TEM / STEM / SAED / 4D-STEM evidence")
+        tem_files = st.file_uploader("Upload TEM/STEM images or diffraction previews", type=["png", "jpg", "jpeg", "tif", "tiff"], accept_multiple_files=True, key="tem_upload")
+        if tem_files:
+            st.session_state.tem_images = [f.name for f in tem_files]
+            for f in tem_files[:3]:
+                st.image(f, caption=f"TEM/STEM: {f.name}", use_container_width=True)
+        st.caption("TEM/STEM validates nanoscale twins, precipitates, habit/interface planes, diffuse scattering and local strain that EBSD may miss. Raw 4D-STEM/SAED connectors are planned.")
+
+with TABS[8]:
+    st.header("Article-derived missing-data map")
+    section_help(
+        "article-derived gap map",
+        "This table translates the literature/open-source landscape into concrete missing pieces for the twin.",
+        "Use it as a development roadmap and as the app's honesty layer: what can be filled from articles/open data now, and what must be generated by our own experiments later.",
+        "Article values can set defaults or validate algorithms, but they cannot replace same-sample evidence for a calibrated twin.",
+    )
+    article_df = dataframe(ARTICLE_EVIDENCE_MAP)
+    st.dataframe(article_df, hide_index=True, use_container_width=True)
+    df_download("Download article-derived gap map", article_df, "article_derived_gap_map_v05.csv")
+    st.markdown(
+        "**Realistic rule:** literature can fill *model form, expected ranges, ORs, benchmark algorithms,* and sometimes open benchmark data. "
+        "It cannot defensibly fill *your sample's exact composition, heat treatment, EBSD/TKD map, DSC curve, XRD lattice parameters, SEM/EDS/TEM evidence,* or mechanical response. Those must be uploaded later by us."
+    )
+
+with TABS[9]:
     st.header("Open data and open tools to fill the gaps")
     section_help(
         "open data/tools",
@@ -495,15 +653,15 @@ with TABS[7]:
     )
     sources_df = dataframe(OPEN_SOURCE_DATASETS)
     st.dataframe(sources_df, hide_index=True, use_container_width=True)
-    df_download("Download open-data manifest", sources_df, "open_data_manifest_v04.csv")
+    df_download("Download open-data manifest", sources_df, "open_data_manifest_v05.csv")
     st.subheader("How these sources are used")
     st.markdown(
         "- **Steel first validation:** use Zenodo high-temperature EBSD/CTF + dilatometry to benchmark parent reconstruction.\n"
-        "- **NiTi first originality:** use Cayron's open article as crystallographic reference, but collect/upload raw NiTi EBSD/TKD/DSC to make it calibrated.\n"
+        "- **NiTi first originality:** use Cayron's open article as crystallographic reference, but collect/upload raw NiTi EBSD/TKD/DSC/XRD/SEM/EDS/TEM to make it calibrated.\n"
         "- **Python ecosystem:** use orix/kikuchipy for robust EBSD/orientation handling; pycalphad for thermodynamics; DAMASK/OpenPhase for future mechanics/phase-field coupling."
     )
 
-with TABS[8]:
+with TABS[10]:
     st.header("What is missing before we can defensibly call it the most comprehensive twin?")
     st.markdown("This is the gap register. It prevents us from pretending the app is more mature than it is.")
     gap_df = dataframe(DEFENSIBILITY_REQUIREMENTS)
@@ -514,9 +672,9 @@ with TABS[8]:
     st.subheader("Recommended next experiments / data actions")
     for item in gap_report.recommended_next_experiments:
         st.write(f"- {item}")
-    st.error("For a defensible 'most comprehensive' claim, the next code milestone is graph-based parent reconstruction + real open steel dataset ingestion + raw NiTi dataset collection. The next data milestone is measured EBSD/TKD + DSC + XRD + mechanical data for the same sample.")
+    st.error("For a defensible 'most comprehensive' claim, the next code milestone is graph-based parent reconstruction + real open steel dataset ingestion + raw NiTi dataset collection. The next data milestone is measured same-sample EBSD/TKD + DSC + XRD + SEM/EDS/TEM + mechanical data.")
 
-with TABS[9]:
+with TABS[11]:
     st.header("Report/export")
     assignment = st.session_state.assignment_result
     metrics = {
@@ -527,6 +685,10 @@ with TABS[9]:
         "n_variants": len(model.variants),
         "dataset_origin": st.session_state.dataset_origin,
         "dataset_points": len(st.session_state.ebsd_df) if has_dataset else 0,
+        "xrd_pattern_uploaded": st.session_state.xrd_df is not None,
+        "eds_table_uploaded": st.session_state.eds_df is not None,
+        "sem_image_count": len(st.session_state.sem_images),
+        "tem_image_count": len(st.session_state.tem_images),
         "variant_fit_tolerance_deg": tol,
         "parent_reconstruction_threshold_deg": recon_thr,
         "lpbf": lpbf,
@@ -542,9 +704,9 @@ with TABS[9]:
     md += "\n\n## Evidence table\n\n" + evidence_table(evidence).to_markdown(index=False)
     md += "\n\n## Defensibility gap register\n\n" + gap_df.to_markdown(index=False)
     st.text_area("Markdown report preview", value=md, height=500)
-    st.download_button("Download Markdown report", md.encode("utf-8"), "open_martensite_twin_v04_report.md", "text/markdown")
+    st.download_button("Download Markdown report", md.encode("utf-8"), "open_martensite_twin_v05_report.md", "text/markdown")
     json_report = build_json_report(model, assignment.summary if assignment else None, metrics, gap_report, notes=notes)
     json_report["state_vector"] = state
     json_report["evidence"] = evidence_table(evidence).to_dict(orient="records")
     json_report["defensibility_gaps"] = gap_df.to_dict(orient="records")
-    st.download_button("Download JSON report", json.dumps(json_report, indent=2).encode("utf-8"), "open_martensite_twin_v04_report.json", "application/json")
+    st.download_button("Download JSON report", json.dumps(json_report, indent=2).encode("utf-8"), "open_martensite_twin_v05_report.json", "application/json")
