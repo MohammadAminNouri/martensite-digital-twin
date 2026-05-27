@@ -20,7 +20,7 @@ from martwin.io.ebsd_csv import read_ebsd_csv, dataframe_to_orientation_matrices
 from martwin.kinetics.km import km_curve
 from martwin.kinetics.niti_transform import NiTiTransformationTemperatures, linear_cooling_fraction, linear_heating_fraction_austenite
 from martwin.calibration.gap_analysis import assess_data_gaps
-from martwin.reporting.report import build_json_report, build_markdown_report
+from martwin.reporting.report import build_markdown_report
 from martwin.visualization.maps import plot_variant_map
 from martwin.digital_twin.evidence import (
     PARAMETER_GUIDE,
@@ -36,7 +36,7 @@ from martwin.digital_twin.evidence import (
     ARTICLE_EVIDENCE_MAP,
 )
 
-st.set_page_config(page_title="OpenMartensiteTwin v0.5.4 hotfix", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="OpenMartensiteTwin v0.5.6 no-crash report hotfix", layout="wide", initial_sidebar_state="expanded")
 
 
 def css() -> None:
@@ -72,6 +72,105 @@ def section_help(title: str, what: str, use: str, warning: str | None = None) ->
 
 def df_download(label: str, df: pd.DataFrame, filename: str) -> None:
     st.download_button(label, df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
+
+
+def json_safe(value: Any) -> Any:
+    """Convert NumPy/Pandas/dataclass objects to JSON-safe objects."""
+    try:
+        import numpy as _np
+        if isinstance(value, _np.generic):
+            return value.item()
+        if isinstance(value, _np.ndarray):
+            return value.tolist()
+    except Exception:
+        pass
+    if isinstance(value, pd.DataFrame):
+        return value.to_dict(orient="records")
+    if isinstance(value, pd.Series):
+        return value.to_dict()
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(v) for v in value]
+    if hasattr(value, "__dict__") and not isinstance(value, (str, bytes)):
+        try:
+            return json_safe(vars(value))
+        except Exception:
+            pass
+    return value
+
+
+def df_markdown_safe(df: pd.DataFrame) -> str:
+    """Return a Markdown table without crashing if tabulate is absent."""
+    try:
+        return df.to_markdown(index=False)
+    except Exception:
+        return "```text\n" + df.to_string(index=False) + "\n```"
+
+
+def build_markdown_report_safe(model, assignment_summary, metrics, gap_report, notes: str) -> str:
+    """Call package report builder if compatible; otherwise build a local fallback."""
+    try:
+        return build_markdown_report(model, assignment_summary, metrics, gap_report, notes=notes)
+    except TypeError:
+        try:
+            return build_markdown_report(model, metrics, gap_report)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    lines = [
+        "# OpenMartensiteTwin Report",
+        "",
+        "## Configuration",
+        f"- Material system: {getattr(getattr(model, 'config', None), 'material_system', 'unknown')}",
+        f"- Orientation relationship: {getattr(getattr(model, 'orientation_relationship', None), 'name', 'unknown')}",
+        f"- Number of variants: {len(getattr(model, 'variants', []))}",
+        "",
+        "## Metrics",
+    ]
+    for k, v in (metrics or {}).items():
+        lines.append(f"- `{k}`: {v}")
+    if assignment_summary is not None and hasattr(assignment_summary, "empty") and not assignment_summary.empty:
+        lines += ["", "## Variant population summary", "", df_markdown_safe(assignment_summary)]
+    if gap_report is not None:
+        lines += ["", "## Gap assessment", f"- Confidence score: {getattr(gap_report, 'confidence_score', 'unknown')}"]
+        missing = getattr(gap_report, "missing", [])
+        lines.append("- Missing: " + (", ".join(map(str, missing)) if missing else "none"))
+    if notes:
+        lines += ["", "## Notes", notes]
+    return "\n".join(lines)
+
+
+def build_local_json_report(model, assignment_summary, metrics, gap_report, notes: str) -> dict[str, Any]:
+    """Build the JSON report locally so Streamlit cannot crash from report.py API drift."""
+    orx = getattr(model, "orientation_relationship", None)
+    cfg = getattr(model, "config", None)
+    gap_payload = None
+    if gap_report is not None:
+        gap_payload = {
+            "confidence_score": getattr(gap_report, "confidence_score", None),
+            "missing": list(getattr(gap_report, "missing", []) or []),
+            "recommended_next_experiments": list(getattr(gap_report, "recommended_next_experiments", []) or []),
+        }
+    payload = {
+        "app_version": "v0.5.6-no-crash-report-hotfix",
+        "configuration": json_safe(cfg),
+        "orientation_relationship": {
+            "name": getattr(orx, "name", "unknown"),
+            "parent_phase": getattr(orx, "parent_phase", "unknown"),
+            "child_phase": getattr(orx, "child_phase", "unknown"),
+            "source_note": getattr(orx, "source_note", ""),
+            "description": getattr(orx, "description", getattr(orx, "source_note", getattr(orx, "name", ""))),
+            "matrix_child_to_parent": json_safe(getattr(orx, "matrix_child_to_parent", None)),
+        },
+        "n_variants": len(getattr(model, "variants", [])),
+        "variant_population_summary": json_safe(assignment_summary) if assignment_summary is not None else None,
+        "metrics": json_safe(metrics or {}),
+        "gap_report": json_safe(gap_payload),
+        "notes": notes,
+    }
+    return json_safe(payload)
 
 
 def make_niti_temperatures(Ms: float, Mf: float, As: float, Af: float) -> NiTiTransformationTemperatures:
@@ -738,13 +837,15 @@ with TABS[11]:
             "in_tolerance_fraction": float(assignment.assignments["is_in_tolerance"].mean()),
         })
     notes = "\n".join([f"Sample ID: {sample_id}", f"Process route: {process_route}", composition_note, heat_note, analyst_notes])
-    md = build_markdown_report(model, assignment.summary if assignment else None, metrics, gap_report, notes=notes)
-    md += "\n\n## Evidence table\n\n" + evidence_table(evidence).to_markdown(index=False)
-    md += "\n\n## Defensibility gap register\n\n" + gap_df.to_markdown(index=False)
+    assignment_summary = assignment.summary if assignment else None
+    md = build_markdown_report_safe(model, assignment_summary, metrics, gap_report, notes=notes)
+    md += "\n\n## Evidence table\n\n" + df_markdown_safe(evidence_table(evidence))
+    md += "\n\n## Defensibility gap register\n\n" + df_markdown_safe(gap_df)
     st.text_area("Markdown report preview", value=md, height=500)
-    st.download_button("Download Markdown report", md.encode("utf-8"), "open_martensite_twin_v054_report.md", "text/markdown")
-    json_report = build_json_report(model, assignment.summary if assignment else None, metrics, gap_report, notes=notes)
-    json_report["state_vector"] = state
-    json_report["evidence"] = evidence_table(evidence).to_dict(orient="records")
-    json_report["defensibility_gaps"] = gap_df.to_dict(orient="records")
-    st.download_button("Download JSON report", json.dumps(json_report, indent=2).encode("utf-8"), "open_martensite_twin_v054_report.json", "application/json")
+    st.download_button("Download Markdown report", md.encode("utf-8"), "open_martensite_twin_v056_report.md", "text/markdown")
+
+    json_report = build_local_json_report(model, assignment_summary, metrics, gap_report, notes=notes)
+    json_report["state_vector"] = json_safe(state)
+    json_report["evidence"] = json_safe(evidence_table(evidence))
+    json_report["defensibility_gaps"] = json_safe(gap_df)
+    st.download_button("Download JSON report", json.dumps(json_report, indent=2).encode("utf-8"), "open_martensite_twin_v056_report.json", "application/json")
