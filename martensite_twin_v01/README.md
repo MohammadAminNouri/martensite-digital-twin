@@ -1,77 +1,106 @@
-# Martensite Twin v0.1
+# OpenMartensiteTwin v0.2
 
-A Python-first scaffold for a comprehensive martensitic-transformation digital twin.
+A Python-first, physics-based digital twin framework for martensitic phase transformations.
 
-This repository is designed as a **physics-based integration platform**, not a black-box AI model. It starts with a working crystallographic/EBSD core and provides extension points for CALPHAD, phase-field, crystal plasticity, LPBF thermal histories, and experimental calibration.
+This version is no longer only a scaffold. It has a usable workflow:
 
-## What works now
+```text
+configure crystallographic model
+→ generate/import EBSD-like orientation data
+→ assign martensite variants
+→ prototype parent-phase reconstruction
+→ run first-order transformation kinetics
+→ assess missing data and confidence
+→ export CSV/Markdown/JSON reports
+```
 
-- Rotation/orientation math: Euler angles, quaternions, misorientation angles.
-- Symmetry operators: cubic 24 proper rotations and a minimal monoclinic setting.
-- Orientation relationship construction from parallel plane/direction pairs.
-- Steel fcc → bcc/bct orientation relationships: KS, NW, Pitsch approximations.
-- NiTi B2 → B19′ Cayron-style natural OR prototype.
-- Variant generation from symmetry.
-- Synthetic EBSD-like CSV generation and import.
-- Variant identification for a known parent orientation.
-- Simple parent-orientation candidate generation.
-- Koistinen–Marburger martensite fraction model for steels.
-- Transformation-temperature record and gap-aware confidence scoring.
-- Data manifest of open/public datasets and tools to collect/validate against.
-- Optional connector stubs for MTEX, ORTools, pycalphad, OpenPhase, DAMASK.
+## Target systems
 
-## What is deliberately not claimed yet
+- **NiTi B2 → B19′** with a Cayron-inspired natural orientation-relationship prototype.
+- **Steel fcc/austenite → bcc/bct martensite** using KS, NW, and Pitsch OR comparators.
 
-This is **not yet a fully validated industrial digital twin**. The hard part is experimental calibration: exact alloy chemistry, EBSD/TKD maps, DSC, XRD, stress–strain curves, residual stress, LPBF thermal history, and heat-treatment records.
+## What v0.2 can do
 
-The code marks missing data and lowers confidence instead of inventing numbers.
+- Generate unique orientation variants from parent/child symmetry.
+- Show orientation relationship matrices and variant tables.
+- Generate synthetic EBSD-like martensite maps for testing.
+- Import CSV orientation data using either `r00..r22` matrix columns or Bunge Euler columns `phi1, Phi, phi2`.
+- Assign measured/synthetic child orientations to theoretical variants.
+- Produce variant population statistics and error metrics.
+- Run a prototype greedy parent reconstruction.
+- Plot assigned variant maps and parent-cluster maps in the Streamlit app.
+- Run first-order kinetics models:
+  - Koistinen–Marburger for steel;
+  - simple DSC-calibrated linear hysteresis for NiTi.
+- Assess data gaps and produce next-experiment recommendations.
+- Export Markdown and JSON reports.
+- Run CI tests on GitHub Actions.
+
+## Important reliability warning
+
+This is still a research prototype. It is not yet publication-grade EBSD reconstruction and not yet an industrial digital twin. Vendor EBSD conventions, phase symmetries, lattice parameters, parent/child orientation definitions, and sample-specific calibration data must be validated.
+
+The goal of v0.2 is to provide a **working workflow**, not final scientific certainty.
 
 ## Quick start
 
 ```bash
-cd martensite_twin_v01
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e .
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -e .[app]
+streamlit run app/streamlit_app.py
+```
+
+Run examples and tests:
+
+```bash
 python examples/demo_niti_cayron.py
 python examples/demo_steel_ks.py
+python examples/demo_workflow_v02.py
+pytest -q
 ```
 
-Outputs are written to `data/processed/`.
+## CSV input format
 
-## Repository structure
+The app accepts either matrix columns:
 
 ```text
-martwin/
-  core/                 matrix/orientation math
-  materials/            material-system definitions and data schema
-  crystallography/      ORs, variants, habit-plane placeholders, reconstruction
-  io/                   EBSD CSV import/export and data manifests
-  kinetics/             KM and transformation curve utilities
-  thermodynamics/       pycalphad/TC-Python hooks and gap-aware stubs
-  mechanics/            transformation-strain and variant-selection hooks
-  calibration/          confidence and gap analysis
-  visualization/        simple plotting utilities
-  connectors/           MTEX, OpenPhase, DAMASK, pycalphad connector stubs
-examples/               runnable examples
-open_data_manifest/     public/open datasets and tool URLs
+x,y,r00,r01,r02,r10,r11,r12,r20,r21,r22
 ```
 
-## Scientific identity
-
-The intended final platform is:
+or Bunge Euler columns:
 
 ```text
-composition + process + heat treatment + EBSD/TKD + DSC/XRD/mechanics
-→ CALPHAD/driving force
-→ martensite kinetics
-→ Cayron/OR crystallography
-→ variant and parent reconstruction
-→ habit-plane/strain/mechanics
-→ validation and uncertainty
-→ report/dashboard/API
+x,y,phi1,Phi,phi2
 ```
 
-## License
+Optional columns include `phase`, `grain_id`, `point_id`, `ci`, and `iq`.
 
-Starter scaffold: MIT. External tools/datasets have their own licenses; check each manifest row before reuse.
+## Roadmap to v0.3/v1.0
+
+### v0.3
+
+- `.ctf`, `.ang`, and `.h5` import through kikuchipy/orix.
+- Better graph-based parent reconstruction.
+- OR refinement from measured EBSD data.
+- Habit-plane trace overlay on maps.
+- Ingestion scripts for open Zenodo steel EBSD/dilatometry datasets.
+
+### v0.5
+
+- pycalphad integration with real thermodynamic databases.
+- DSC/dilatometry fitting.
+- XRD phase-fraction/lattice-parameter ingestion.
+- Better NiTi transformation-temperature model.
+
+### v1.0
+
+- OpenPhase/DAMASK connectors.
+- LPBF thermal-history import and process metadata schema.
+- Uncertainty propagation.
+- Validation reports against known datasets.
+- Web API via FastAPI.
+
+## Repository identity
+
+**OpenMartensiteTwin** is designed as an integration platform, not a black-box AI model. It combines crystallography, EBSD/TKD analysis, parent reconstruction, thermodynamics, kinetics, mechanics, and experimental feedback in one modular workflow.
