@@ -395,7 +395,17 @@ with TABS[3]:
     c1, c2 = st.columns([1, 1])
     with c1:
         st.subheader("Orientation relationship")
-        st.write(model.orientation_relationship.description)
+     st.write(
+    getattr(
+        model.orientation_relationship,
+        "description",
+        getattr(
+            model.orientation_relationship,
+            "source_note",
+            model.orientation_relationship.name,
+        ),
+    )
+)
         st.caption("Matrix convention here: child crystal frame → parent crystal frame. If your EBSD software uses a different convention, convert before comparing.")
         or_df = pd.DataFrame(model.orientation_relationship.matrix_child_to_parent, columns=["parent x", "parent y", "parent z"], index=["child x", "child y", "child z"])
         st.dataframe(or_df.style.format("{:.4f}"), use_container_width=True)
