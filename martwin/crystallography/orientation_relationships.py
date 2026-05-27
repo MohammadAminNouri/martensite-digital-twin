@@ -64,15 +64,20 @@ class OrientationRelationship:
     child_plane: tuple[float, float, float] | None = None
     parent_direction: tuple[float, float, float] | None = None
     child_direction: tuple[float, float, float] | None = None
-   source_note: str = ""
+    source_note: str = ""
 
-@property
-def description(self) -> str:
-    """Human-readable explanation used by the Streamlit app/reporting layer."""
-    return self.source_note or self.name
+    @property
+    def description(self) -> str:
+        """Human-readable explanation used by the Streamlit app/reporting layer.
 
-def as_parent_to_child(self) -> np.ndarray:
-    return self.matrix_child_to_parent.T
+        Earlier app code referenced `description`; the core dataclass stores the
+        same information as `source_note`. Keeping this property avoids UI crashes
+        and makes the object backward-compatible.
+        """
+        return self.source_note or self.name
+
+    def as_parent_to_child(self) -> np.ndarray:
+        return self.matrix_child_to_parent.T
 
 
 def steel_ks_or() -> OrientationRelationship:

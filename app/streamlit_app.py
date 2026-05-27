@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ from martwin.digital_twin.evidence import (
     ARTICLE_EVIDENCE_MAP,
 )
 
-st.set_page_config(page_title="OpenMartensiteTwin v0.5", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="OpenMartensiteTwin v0.5.4 hotfix", layout="wide", initial_sidebar_state="expanded")
 
 
 def css() -> None:
@@ -71,6 +72,33 @@ def section_help(title: str, what: str, use: str, warning: str | None = None) ->
 
 def df_download(label: str, df: pd.DataFrame, filename: str) -> None:
     st.download_button(label, df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
+
+
+def make_niti_temperatures(Ms: float, Mf: float, As: float, Af: float) -> NiTiTransformationTemperatures:
+    """Create a NiTiTransformationTemperatures object across v0.5 API variants.
+
+    Some package versions use Ms_C/Mf_C/As_C/Af_C while earlier app code used
+    Ms/Mf/As_/Af. Streamlit Cloud can keep stale package files after uploads, so
+    this function tries the supported constructor names instead of crashing.
+    """
+    candidates = [
+        {"Ms_C": Ms, "Mf_C": Mf, "As_C": As, "Af_C": Af},
+        {"Ms": Ms, "Mf": Mf, "As_": As, "Af": Af},
+        {"Ms": Ms, "Mf": Mf, "As": As, "Af": Af},
+    ]
+    try:
+        params = set(inspect.signature(NiTiTransformationTemperatures).parameters)
+        for kwargs in candidates:
+            if set(kwargs).issubset(params):
+                return NiTiTransformationTemperatures(**kwargs)
+    except Exception:
+        pass
+    for kwargs in candidates:
+        try:
+            return NiTiTransformationTemperatures(**kwargs)
+        except TypeError:
+            continue
+    return NiTiTransformationTemperatures(Ms, Mf, As, Af)
 
 
 def make_niti_kinetics_plot(temps: np.ndarray, cooling: list[float], heating: list[float], Ms: float, Mf: float, As: float, Af: float) -> plt.Figure:
@@ -293,7 +321,7 @@ has_validation = parent_ref_known or retained_known or mech_known or hardness_kn
 level, level_note = maturity_level(gap_report.confidence_score, has_dataset, has_calibration, has_process, has_validation)
 
 # Header
-st.title("OpenMartensiteTwin v0.5")
+st.title("OpenMartensiteTwin v0.5.4 hotfix")
 st.caption("A guided, evidence-aware martensitic-transformation twin. v0.5 is designed to be honest: it separates calculation, evidence, assumptions and missing validation.")
 
 cols = st.columns(7)
@@ -544,7 +572,7 @@ with TABS[6]:
         tmin = min(Mf, As, Ms, Af) - 30
         tmax = max(Mf, As, Ms, Af) + 30
         temps = np.linspace(tmin, tmax, 220)
-        trans = NiTiTransformationTemperatures(Ms=Ms, Mf=Mf, As_=As, Af=Af)
+        trans = make_niti_temperatures(Ms=Ms, Mf=Mf, As=As, Af=Af)
         cooling = [linear_cooling_fraction(float(T), trans) for T in temps]
         heating = [linear_heating_fraction_austenite(float(T), trans) for T in temps]
         kinetics_df = pd.DataFrame({"temperature_C": temps, "B19prime_fraction_cooling": cooling, "B2_fraction_heating": heating})
@@ -714,9 +742,9 @@ with TABS[11]:
     md += "\n\n## Evidence table\n\n" + evidence_table(evidence).to_markdown(index=False)
     md += "\n\n## Defensibility gap register\n\n" + gap_df.to_markdown(index=False)
     st.text_area("Markdown report preview", value=md, height=500)
-    st.download_button("Download Markdown report", md.encode("utf-8"), "open_martensite_twin_v05_report.md", "text/markdown")
+    st.download_button("Download Markdown report", md.encode("utf-8"), "open_martensite_twin_v054_report.md", "text/markdown")
     json_report = build_json_report(model, assignment.summary if assignment else None, metrics, gap_report, notes=notes)
     json_report["state_vector"] = state
     json_report["evidence"] = evidence_table(evidence).to_dict(orient="records")
     json_report["defensibility_gaps"] = gap_df.to_dict(orient="records")
-    st.download_button("Download JSON report", json.dumps(json_report, indent=2).encode("utf-8"), "open_martensite_twin_v05_report.json", "application/json")
+    st.download_button("Download JSON report", json.dumps(json_report, indent=2).encode("utf-8"), "open_martensite_twin_v054_report.json", "application/json")
