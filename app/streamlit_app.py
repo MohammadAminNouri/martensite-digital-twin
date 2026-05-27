@@ -15,24 +15,25 @@ sys.path.insert(0, str(ROOT))
 
 from martwin.workflows.digital_twin import TwinConfiguration, build_twin_model, run_known_parent_analysis, variant_library_tables
 from martwin.simulation.synthetic import generate_synthetic_child_map
-from martwin.io.ebsd_csv import read_ebsd_csv
-from martwin.analysis.variant_analysis import assign_variants_known_parent_regions
-from martwin.io.manifest import read_open_data_manifest
+from martwin.io.ebsd_csv import read_ebsd_csv, dataframe_to_orientation_matrices
 from martwin.kinetics.km import km_curve
 from martwin.kinetics.niti_transform import NiTiTransformationTemperatures, linear_cooling_fraction, linear_heating_fraction_austenite
 from martwin.calibration.gap_analysis import assess_data_gaps
 from martwin.reporting.report import build_json_report, build_markdown_report
 from martwin.visualization.maps import plot_variant_map
-from martwin.explain import (
-    CONCEPTS,
-    TABLE_EXPLANATIONS,
-    MATURITY_LEVELS,
-    workflow_dataframe,
-    data_requirement_table,
-    explain_columns,
+from martwin.digital_twin.evidence import (
+    PARAMETER_GUIDE,
+    TWIN_LAYER_MATRIX,
+    OPEN_SOURCE_DATASETS,
+    DEFENSIBILITY_REQUIREMENTS,
+    FIDELITY_LEVELS,
+    TwinEvidence,
+    dataframe,
+    maturity_level,
+    evidence_table,
 )
 
-st.set_page_config(page_title="OpenMartensiteTwin v0.3", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="OpenMartensiteTwin v0.4", layout="wide", initial_sidebar_state="expanded")
 
 
 def css() -> None:
@@ -40,67 +41,59 @@ def css() -> None:
         """
         <style>
         .small-muted { color: #9ca3af; font-size: 0.92rem; }
-        .card { border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 1rem; background: rgba(255,255,255,0.035); margin-bottom: 0.7rem; }
-        .good { color: #22c55e; font-weight: 700; }
+        .tiny-muted { color: #9ca3af; font-size: 0.78rem; }
+        .card { border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 1rem; background: rgba(255,255,255,0.035); margin-bottom: 0.75rem; }
+        .claim { border-left: 4px solid #ef4444; padding: .75rem 1rem; background: rgba(239,68,68,.08); border-radius: 8px; }
+        .ok { color: #22c55e; font-weight: 700; }
         .warn { color: #f59e0b; font-weight: 700; }
         .bad { color: #ef4444; font-weight: 700; }
-        .step { font-weight: 700; color: #e5e7eb; }
+        .pill { display: inline-block; padding: .15rem .45rem; border-radius: 999px; background: rgba(255,255,255,.08); margin-right: .35rem; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-css()
+def card(title: str, body: str, tone: str = "") -> None:
+    cls = "card" if not tone else f"card {tone}"
+    st.markdown(f"<div class='{cls}'><b>{title}</b><br>{body}</div>", unsafe_allow_html=True)
 
 
-def card(title: str, body: str, footer: str | None = None) -> None:
-    foot = f"<div class='small-muted'>{footer}</div>" if footer else ""
-    st.markdown(f"<div class='card'><b>{title}</b><br>{body}{foot}</div>", unsafe_allow_html=True)
+def section_help(title: str, what: str, use: str, warning: str | None = None) -> None:
+    with st.expander(f"What this section means — {title}", expanded=False):
+        st.markdown(f"**What it is:** {what}")
+        st.markdown(f"**Where it is used:** {use}")
+        if warning:
+            st.warning(warning)
 
 
-def explain_table(key: str, columns: list[str] | None = None) -> None:
-    meta = TABLE_EXPLANATIONS[key]
-    with st.expander(f"How to read this: {meta['title']}", expanded=True):
-        st.markdown(f"**What it is:** {meta['what']}")
-        st.markdown(f"**Why it matters:** {meta['why']}")
-        st.markdown(f"**How to read it:** {meta['how_to_read']}")
-        st.markdown(f"**Where it is used later:** {meta['used_downstream']}")
-        if columns:
-            st.markdown("**Column meanings**")
-            st.dataframe(explain_columns(columns), hide_index=True, use_container_width=True)
+def df_download(label: str, df: pd.DataFrame, filename: str) -> None:
+    st.download_button(label, df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
 
 
-def maturity_from_gap_score(score: float, has_dataset: bool, has_kinetics_data: bool, lpbf: bool) -> tuple[str, str]:
-    if not has_dataset:
-        return "L0", "Theoretical crystallography only: no EBSD/TKD map is loaded."
-    if score < 0.35:
-        return "L1", "EBSD/TKD interpretation prototype: orientation map exists, but calibration data are mostly missing."
-    if score < 0.65:
-        return "L2", "Partly calibrated transformation twin: some measurements exist, but process/property links are incomplete."
-    if score < 0.85 or not lpbf:
-        return "L3", "Process-aware research twin: enough evidence for meaningful comparisons, but still needs independent validation."
-    return "L4", "Predictive engineering twin candidate: high data coverage; validate on independent samples before decisions."
-
-
-def make_niti_kinetics_plot(temps: np.ndarray, cooling: list[float], heating: list[float]) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+def make_niti_kinetics_plot(temps: np.ndarray, cooling: list[float], heating: list[float], Ms: float, Mf: float, As: float, Af: float) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(10.5, 4.8))
     ax.plot(temps, cooling, label="B19′ martensite fraction during cooling")
     ax.plot(temps, heating, label="B2 austenite fraction during heating")
+    for val, name in [(Ms, "Ms"), (Mf, "Mf"), (As, "As"), (Af, "Af")]:
+        ax.axvline(val, linestyle="--", alpha=0.5)
+        ax.text(val, 1.02, name, rotation=90, va="bottom", ha="center", fontsize=8)
     ax.set_xlabel("Temperature (°C)")
-    ax.set_ylabel("Phase fraction (0 to 1)")
-    ax.set_title("Simplified NiTi transformation hysteresis")
+    ax.set_ylabel("Phase fraction (0 = none, 1 = all)")
+    ax.set_title("NiTi simplified hysteresis: DSC-style placeholder")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best")
     return fig
 
 
-def make_steel_kinetics_plot(temps: np.ndarray, frac: list[float]) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(9.5, 4.6))
-    ax.plot(temps, frac, label="Martensite fraction during cooling")
+def make_steel_kinetics_plot(temps: np.ndarray, frac: list[float], Ms: float, alpha: float) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(10.5, 4.8))
+    ax.plot(temps, frac, label=f"Martensite fraction, KM alpha={alpha:.4f}")
+    ax.axvline(Ms, linestyle="--", alpha=0.5)
+    ax.text(Ms, 1.02, "Ms", rotation=90, va="bottom", ha="center", fontsize=8)
     ax.set_xlabel("Temperature (°C)")
-    ax.set_ylabel("Martensite fraction (0 to 1)")
-    ax.set_title("Koistinen–Marburger first-order steel martensite model")
+    ax.set_ylabel("Martensite fraction (0 = none, 1 = all)")
+    ax.set_title("Steel Koistinen–Marburger cooling model")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best")
     return fig
@@ -113,41 +106,86 @@ def init_state() -> None:
         "synthetic_parents": None,
         "assignment_result": None,
         "recon_result": None,
-        "gap_report": None,
         "last_kinetics_df": None,
-        "available_data": {},
-        "sample_record": {},
+        "last_report": None,
+        "dataset_origin": "none",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 
+css()
 init_state()
 
-# Sidebar configuration
+# Sidebar controls with explanations
 with st.sidebar:
-    st.header("Build the twin")
-    material_system = st.selectbox("Material system", ["NiTi B2→B19′", "Steel fcc→bcc/bct"], help="Choose the parent→martensite transformation family.")
-    is_niti = material_system.startswith("NiTi")
-    if is_niti:
-        beta = st.number_input("B19′ monoclinic beta angle (°)", value=96.8, min_value=90.0, max_value=110.0, step=0.1, help="Sample-specific B19′ lattice parameter. Default is a prototype value; replace with XRD/refined data for real work.")
-        steel_or = "KS"
-    else:
-        beta = 96.8
-        steel_or = st.selectbox("Steel orientation relationship", ["KS", "NW", "Pitsch"], help="Comparator OR used to generate fcc→bcc/bct martensite variants.")
-    tol = st.slider("Variant fit tolerance (°)", min_value=1.0, max_value=15.0, value=5.0, step=0.5, help="Maximum angular mismatch accepted when assigning a measured point to a theoretical variant.")
-    recon_thr = st.slider("Parent reconstruction threshold (°)", min_value=1.0, max_value=15.0, value=5.0, step=0.5, help="Prototype clustering threshold for parent reconstruction.")
-    lpbf = st.checkbox("LPBF/additive manufacturing route", value=False, help="Adds AM-specific data requirements such as powder chemistry, scan strategy, thermal history, porosity, and residual stress.")
-    education_mode = st.checkbox("Show teaching explanations", value=True)
+    st.title("Twin controls")
+    st.caption("These controls do not magically make the twin real. They define the model assumptions and evidence state for this run.")
 
-    st.divider()
-    st.subheader("Sample/process record")
-    sample_id = st.text_input("Sample ID", value="demo_sample_001")
-    process_route = st.selectbox("Process route", ["unknown", "cast/wrought", "heat treated", "LPBF", "cold worked + annealed", "literature dataset"], index=0)
-    composition_note = st.text_area("Composition / chemistry", placeholder="Example: Ni 50.8 at.%, Ti balance, O < 500 ppm; or Fe-0.2C-1.5Mn...")
-    heat_treatment_note = st.text_area("Heat treatment / thermal cycle", placeholder="Example: solution 850°C 30 min, water quench, age 500°C 30 min...")
-    analyst_notes = st.text_area("Analyst notes", placeholder="EBSD settings, data source, uncertainty, literature DOI, lab notes...")
+    with st.expander("1. Material model", expanded=True):
+        material_system = st.selectbox(
+            "Material system",
+            ["NiTi B2→B19′", "Steel fcc→bcc/bct"],
+            help="Chooses the transformation family, symmetry, orientation relationships, variant library and missing-data checklist.",
+        )
+        is_niti = material_system.startswith("NiTi")
+        if is_niti:
+            beta = st.number_input(
+                "B19′ beta angle (°)", value=96.8, min_value=90.0, max_value=110.0, step=0.1,
+                help="Monoclinic angle of B19′ martensite. This affects the prototype Cayron-style NiTi orientation matrix and variant library. Replace with XRD/refined sample data for real work.",
+            )
+            steel_or = "KS"
+        else:
+            beta = 96.8
+            steel_or = st.selectbox(
+                "Steel OR", ["KS", "NW", "Pitsch"],
+                help="The parent austenite→martensite orientation relationship used to create theoretical variants. Real EBSD work should refine this OR.",
+            )
+
+    with st.expander("2. Fitting / reconstruction settings", expanded=True):
+        tol = st.slider(
+            "Variant fit tolerance (°)", 1.0, 15.0, 5.0, 0.5,
+            help="Measured point is accepted as a variant if its angular error is below this. Higher = more assignments but more false positives; lower = stricter but may reject noisy EBSD.",
+        )
+        recon_thr = st.slider(
+            "Parent reconstruction threshold (°)", 1.0, 15.0, 5.0, 0.5,
+            help="Prototype threshold for grouping candidate parent orientations. Higher merges parent clusters; lower splits them. v0.4 is not yet full MTEX/ARPGE graph reconstruction.",
+        )
+
+    with st.expander("3. Synthetic data controls", expanded=False):
+        st.caption("Synthetic data tests the workflow. It is not evidence for any real alloy.")
+        grid_n = st.slider("Synthetic map size", 20, 100, 50, 10, help="Creates grid_n × grid_n synthetic EBSD-like orientation points.")
+        n_parents = st.slider("Synthetic parent grains", 1, 8, 4, 1, help="Number of rectangular parent regions used in the synthetic test map.")
+        active_fraction = st.slider("Active variant fraction", 0.1, 1.0, 0.55, 0.05, help="Fraction of theoretical variants allowed inside each synthetic parent grain.")
+        noise_deg = st.slider("Orientation noise (°)", 0.0, 5.0, 0.8, 0.1, help="Random angular perturbation added to synthetic orientations. Higher noise increases angular fit error.")
+
+    with st.expander("4. Evidence available for this sample", expanded=True):
+        st.caption("Check only what you really have. These boxes change confidence/maturity, not the raw orientation math.")
+        composition_known = st.checkbox("composition known", value=False)
+        heat_known = st.checkbox("heat treatment / thermal cycle known", value=False)
+        dsc_known = st.checkbox("DSC / transformation temperatures available", value=False)
+        xrd_known = st.checkbox("XRD / lattice or phase fractions available", value=False)
+        mech_known = st.checkbox("stress-strain / mechanical data available", value=False)
+        oxy_known = st.checkbox("oxygen/carbon/impurities known", value=False)
+        cooling_known = st.checkbox("cooling curve / dilatometry available", value=False)
+        parent_ref_known = st.checkbox("known parent reference map/grain size available", value=False)
+        hardness_known = st.checkbox("hardness data available", value=False)
+        retained_known = st.checkbox("retained austenite XRD available", value=False)
+        lpbf = st.checkbox("LPBF/additive manufacturing route", value=False)
+        laser_known = st.checkbox("LPBF laser parameters known", value=False, disabled=not lpbf)
+        scan_known = st.checkbox("LPBF scan strategy known", value=False, disabled=not lpbf)
+        powder_known = st.checkbox("LPBF powder chemistry known", value=False, disabled=not lpbf)
+        thermal_known = st.checkbox("thermal history / melt-pool model available", value=False)
+        porosity_known = st.checkbox("porosity data available", value=False, disabled=not lpbf)
+        residual_known = st.checkbox("residual stress data available", value=False)
+
+    with st.expander("5. Sample notes", expanded=False):
+        sample_id = st.text_input("Sample ID", value="sample_001")
+        process_route = st.selectbox("Process route", ["unknown", "literature dataset", "cast/wrought", "solution treated", "aged", "quenched", "LPBF", "cold worked + annealed"])
+        composition_note = st.text_area("Composition note", placeholder="Example: Ni 50.8 at.% Ti bal.; Fe-0.2C-1.5Mn...", height=80)
+        heat_note = st.text_area("Heat treatment / process note", placeholder="Example: 500°C 30 min ageing; quench rate; LPBF P-v-h-t...", height=80)
+        analyst_notes = st.text_area("Analyst notes", placeholder="Data source, DOI, EBSD settings, caveats...", height=80)
 
 config = TwinConfiguration(
     material_system=material_system,
@@ -159,427 +197,354 @@ config = TwinConfiguration(
 )
 model = build_twin_model(config)
 
-st.session_state.sample_record = {
-    "sample_id": sample_id,
-    "material_system": material_system,
-    "process_route": process_route,
-    "composition_note": composition_note,
-    "heat_treatment_note": heat_treatment_note,
-    "lpbf": lpbf,
-    "analyst_notes": analyst_notes,
-}
+has_dataset = st.session_state.ebsd_df is not None
+if has_dataset:
+    dataset_available = True
+else:
+    dataset_available = False
+
+evidence = TwinEvidence(
+    composition=composition_known or bool(composition_note.strip()),
+    heat_treatment=heat_known or bool(heat_note.strip()),
+    ebsd_or_tkd=dataset_available,
+    dsc=dsc_known,
+    xrd_lattice=xrd_known,
+    stress_strain=mech_known,
+    oxygen_carbon=oxy_known,
+    thermal_history=thermal_known,
+    cooling_curve=cooling_known,
+    prior_austenite_reference=parent_ref_known,
+    hardness=hardness_known,
+    retained_austenite_xrd=retained_known,
+    laser_parameters=laser_known,
+    scan_strategy=scan_known,
+    powder_chemistry=powder_known,
+    melt_pool_or_thermal_model=thermal_known,
+    porosity=porosity_known,
+    residual_stress=residual_known,
+)
+
+material_key_for_gaps = model.material_key + (" lpbf" if lpbf else "")
+gap_report = assess_data_gaps(material_key_for_gaps, evidence.as_gap_dict())
+has_calibration = dsc_known or xrd_known or cooling_known or mech_known or hardness_known
+has_process = heat_known or bool(heat_note.strip()) or thermal_known or cooling_known or laser_known
+has_validation = parent_ref_known or retained_known or mech_known or hardness_known
+level, level_note = maturity_level(gap_report.confidence_score, has_dataset, has_calibration, has_process, has_validation)
 
 # Header
-st.title("OpenMartensiteTwin v0.3")
-st.caption("Guided martensitic-transformation digital twin: data record → crystallography → EBSD/TKD variants → parent reconstruction → kinetics → reliability → report.")
+st.title("OpenMartensiteTwin v0.4")
+st.caption("A guided, evidence-aware martensitic-transformation twin. v0.4 is designed to be honest: it separates calculation, evidence, assumptions and missing validation.")
 
-# Data availability from state
-has_dataset = st.session_state.ebsd_df is not None
-material_key_for_gaps = model.material_key + (" lpbf" if lpbf else "")
-if not st.session_state.available_data:
-    st.session_state.available_data = {}
-base_available = dict(st.session_state.available_data)
-base_available["ebsd_or_tkd"] = bool(has_dataset or base_available.get("ebsd_or_tkd", False))
-base_available["composition"] = bool(composition_note.strip()) or bool(base_available.get("composition", False))
-base_available["heat_treatment"] = bool(heat_treatment_note.strip()) or bool(base_available.get("heat_treatment", False))
-current_gap_report = assess_data_gaps(material_key_for_gaps, base_available)
-level, level_note = maturity_from_gap_score(current_gap_report.confidence_score, has_dataset, bool(base_available.get("DSC") or base_available.get("cooling_curve")), lpbf)
-st.session_state.gap_report = current_gap_report
+cols = st.columns(7)
+cols[0].metric("Twin maturity", level.split(" — ")[0])
+cols[1].metric("Material", "NiTi" if is_niti else "Steel")
+cols[2].metric("OR", model.orientation_relationship.name.split()[0])
+cols[3].metric("Variants", len(model.variants))
+cols[4].metric("Dataset points", len(st.session_state.ebsd_df) if has_dataset else 0)
+cols[5].metric("Data confidence", f"{gap_report.confidence_score:.2f}")
+cols[6].metric("Dataset", st.session_state.dataset_origin)
 
-mcols = st.columns(6)
-mcols[0].metric("Twin level", level)
-mcols[1].metric("Material", "NiTi" if is_niti else "Steel")
-mcols[2].metric("OR", model.orientation_relationship.name.split()[0])
-mcols[3].metric("Variants", len(model.variants))
-mcols[4].metric("Dataset points", len(st.session_state.ebsd_df) if has_dataset else 0)
-mcols[5].metric("Data confidence", f"{current_gap_report.confidence_score:.2f}")
-st.info(level_note)
+st.warning(level_note)
+st.markdown(
+    "<span class='pill'>calculation ≠ validation</span>"
+    "<span class='pill'>synthetic data ≠ experiment</span>"
+    "<span class='pill'>fit tolerance changes conclusions</span>",
+    unsafe_allow_html=True,
+)
 
-if education_mode:
-    with st.expander("What makes this a digital twin, and what is still missing?", expanded=True):
-        st.write(CONCEPTS["digital_twin"]["plain"])
-        st.write(CONCEPTS["digital_twin"]["used_for"])
-        st.dataframe(pd.DataFrame(MATURITY_LEVELS), hide_index=True, use_container_width=True)
-        st.warning("v0.3 is still a research prototype. It becomes a real calibrated twin only when measured EBSD/TKD, DSC/dilatometry, XRD, composition, processing history, and mechanical validation are supplied.")
-
-workflow_tabs = st.tabs([
-    "0. Workflow",
-    "1. Data record",
-    "2. Crystallography",
-    "3. EBSD/TKD data",
-    "4. Variant analysis",
-    "5. Kinetics",
-    "6. Reliability",
+TABS = st.tabs([
+    "0. Twin map",
+    "1. Controls explained",
+    "2. Evidence/state vector",
+    "3. Crystallography",
+    "4. Data workspace",
+    "5. Variant & parent analysis",
+    "6. Kinetics",
     "7. Open data/tools",
-    "8. Report",
+    "8. Defensibility gaps",
+    "9. Report/export",
 ])
 
-with workflow_tabs[0]:
-    st.header("How the twin works")
-    st.write("This tab explains the logic before showing tables and graphs. Every table in the app is either an **input**, a **model assumption**, an **analysis result**, or a **reliability check**.")
-    st.dataframe(workflow_dataframe(), hide_index=True, use_container_width=True)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        card("Input layer", "Composition, heat treatment, process route, thermal history, and experimental files.", "Without these, the twin runs in theoretical/demo mode.")
-    with c2:
-        card("Physics layer", "Orientation relationships, symmetry operations, variants, misorientation, and transformation kinetics.", "This is the engine, not the final truth.")
-    with c3:
-        card("Feedback layer", "EBSD/TKD/XRD/DSC/mechanical data are used to compare, calibrate, and score reliability.", "This is what turns a model into a twin.")
+with TABS[0]:
+    st.header("What this app is actually doing")
+    card(
+        "Digital-twin loop",
+        "<b>State</b> = material + process + measured data. <b>Model</b> = crystallography + kinetics + future thermodynamics/mechanics. <b>Update</b> = compare predictions to EBSD/TKD/DSC/XRD/mechanical evidence. <b>Decision</b> = identify missing data and recommend the next experiment."
+    )
+    st.subheader("Current implementation vs complete target")
+    layer_df = dataframe(TWIN_LAYER_MATRIX)
+    st.dataframe(layer_df, hide_index=True, use_container_width=True)
+    st.markdown("### Fidelity ladder")
+    st.dataframe(dataframe(FIDELITY_LEVELS), hide_index=True, use_container_width=True)
+    st.info("The roadmap you gave is correct: the twin must combine Cayron-style crystallography, EBSD/TKD reconstruction, thermodynamics, kinetics, phase-field/mechanics, LPBF/heat-treatment data, uncertainty and reporting. v0.4 makes those layers visible instead of hiding them.")
 
-    st.subheader("One-click demo")
-    st.write("This creates a synthetic EBSD-like map, assigns variants using the known synthetic parent regions, and produces maps/statistics. It proves the workflow works; it is not real experimental validation.")
-    if st.button("Run complete synthetic twin demo", type="primary"):
-        synth = generate_synthetic_child_map(
-            model.variants,
-            grid_shape=(50, 70),
-            n_parent_grains=4,
-            active_variant_fraction=0.55,
-            orientation_noise_deg=0.75,
-            seed=7,
-        )
-        st.session_state.ebsd_df = synth.dataframe
-        st.session_state.child_oris = synth.child_orientations
-        st.session_state.synthetic_parents = synth.parent_orientations
-        assignment = assign_variants_known_parent_regions(
-            st.session_state.child_oris,
-            st.session_state.synthetic_parents,
-            st.session_state.ebsd_df["parent_region_id"].tolist(),
-            model.variants,
-            child_sym_ops=model.child_sym_ops,
-            tolerance_deg=model.config.angular_tolerance_deg,
-        )
-        _, recon, _ = run_known_parent_analysis(model, st.session_state.child_oris, parent_orientation=np.eye(3), available_data={"ebsd_or_tkd": True})
-        result_df = st.session_state.ebsd_df.drop(columns=["orientation_matrix"], errors="ignore").copy()
-        result_df = result_df.merge(assignment.assignments, on="point_id", how="left")
-        result_df["reconstructed_parent_cluster"] = recon.labels
-        st.session_state.ebsd_df = result_df
-        st.session_state.assignment_result = assignment
-        st.session_state.recon_result = recon
-        st.session_state.available_data["ebsd_or_tkd"] = True
-        st.success("Synthetic demo completed. Go to tabs 3–4 to inspect the dataset, variants, and maps.")
+with TABS[1]:
+    st.header("Every left-panel control: what it means and what it changes")
+    guide_df = dataframe(PARAMETER_GUIDE)
+    st.dataframe(guide_df, hide_index=True, use_container_width=True)
+    st.markdown("### Quick sensitivity explanation")
+    st.write("Changing **fit tolerance** or **reconstruction threshold** can change the number of assigned points and parent clusters. Changing **beta angle** or **steel OR** changes the theoretical variant library itself. Evidence checkboxes change the maturity/confidence score and gap register, but they do not magically create measured data.")
 
-with workflow_tabs[1]:
-    st.header("Material, process, and evidence record")
-    st.write("A digital twin needs a record of what is measured, what is assumed, and what is unknown. This tab is the evidence ledger.")
-    rec = pd.DataFrame([
-        {"field": "sample_id", "value": sample_id, "why it matters": "Connects all files/results to one physical or synthetic sample."},
-        {"field": "material_system", "value": material_system, "why it matters": "Selects the transformation model and required data."},
-        {"field": "process_route", "value": process_route, "why it matters": "Processing controls grain structure, texture, stresses, phases, and transformation path."},
-        {"field": "composition_note", "value": composition_note or "missing", "why it matters": "Chemistry strongly affects lattice parameters, driving force, and transformation temperatures."},
-        {"field": "heat_treatment_note", "value": heat_treatment_note or "missing", "why it matters": "Heat treatment controls precipitation, residual stress, phase state, and transformation response."},
-        {"field": "LPBF/AM", "value": str(lpbf), "why it matters": "If true, process thermal history and residual stress become essential."},
-    ])
-    st.dataframe(rec, hide_index=True, use_container_width=True)
+with TABS[2]:
+    st.header("Evidence and state vector")
+    section_help(
+        "state vector",
+        "The state vector is the current description of the sample: material, OR, process, available measurements, assumptions and data source.",
+        "Every downstream table and plot should be traceable to this state vector, so reports do not mix real data with assumptions.",
+        "A defensible twin must store the raw data/provenance, not only checkboxes.",
+    )
+    state = {
+        "sample_id": sample_id,
+        "material_system": material_system,
+        "orientation_relationship": model.orientation_relationship.name,
+        "beta_deg": beta if is_niti else None,
+        "steel_or": steel_or if not is_niti else None,
+        "variant_fit_tolerance_deg": tol,
+        "parent_reconstruction_threshold_deg": recon_thr,
+        "process_route": process_route,
+        "lpbf_route": lpbf,
+        "dataset_origin": st.session_state.dataset_origin,
+        "dataset_points": len(st.session_state.ebsd_df) if has_dataset else 0,
+        "composition_note": composition_note,
+        "heat_treatment_note": heat_note,
+        "analyst_notes": analyst_notes,
+        "maturity_level": level,
+        "confidence_score": gap_report.confidence_score,
+    }
+    st.json(state)
+    st.subheader("Evidence table")
+    e_df = evidence_table(evidence)
+    st.dataframe(e_df, hide_index=True, use_container_width=True)
+    df_download("Download evidence table", e_df, "open_martensite_twin_evidence.csv")
 
-    st.subheader("Data requirements for this material system")
-    req = data_requirement_table("NiTi" if is_niti else "Steel", lpbf=lpbf)
-    st.dataframe(req, hide_index=True, use_container_width=True)
-    st.caption("These are not decorative fields. Each missing item reduces what the twin can honestly predict.")
-
-with workflow_tabs[2]:
+with TABS[3]:
     st.header("Crystallographic model")
-    if education_mode:
-        st.write(CONCEPTS["orientation_relationship"]["plain"])
-        st.write(CONCEPTS["variant"]["plain"])
-
-    tables = variant_library_tables(model)
-    or_df = pd.DataFrame(model.orientation_relationship.matrix_child_to_parent, index=["x_parent", "y_parent", "z_parent"], columns=["x_child", "y_child", "z_child"])
-    vdf = tables["variants"].copy()
-    mdf = tables["misorientation_matrix_deg"].copy().round(3)
-
-    c1, c2 = st.columns([1.0, 1.1])
+    section_help(
+        "orientation relationship and variants",
+        "The OR matrix maps a child/martensite crystal frame to the parent crystal frame. Symmetry operations generate all allowed theoretical variants.",
+        "Variant assignment compares measured EBSD/TKD orientations against these theoretical variant orientations. The misorientation matrix shows expected angular separations between variants.",
+        "The current NiTi model is a Cayron-inspired prototype; exact work requires sample-specific lattice parameters, convention checks and benchmark validation.",
+    )
+    c1, c2 = st.columns([1, 1])
     with c1:
         st.subheader("Orientation relationship")
-        st.write(f"**Model:** {model.orientation_relationship.name}")
-        st.write(f"**Parent phase:** `{model.orientation_relationship.parent_phase}`")
-        st.write(f"**Martensite/child phase:** `{model.orientation_relationship.child_phase}`")
-        st.write(model.orientation_relationship.source_note)
-        st.dataframe(or_df.round(4), use_container_width=True)
-        if education_mode:
-            explain_table("or_matrix", list(or_df.columns))
+        st.write(model.orientation_relationship.description)
+        st.caption("Matrix convention here: child crystal frame → parent crystal frame. If your EBSD software uses a different convention, convert before comparing.")
+        or_df = pd.DataFrame(model.orientation_relationship.matrix_child_to_parent, columns=["parent x", "parent y", "parent z"], index=["child x", "child y", "child z"])
+        st.dataframe(or_df.style.format("{:.4f}"), use_container_width=True)
     with c2:
         st.subheader("Variant library")
-        st.dataframe(vdf.head(100).round(4), use_container_width=True)
-        st.download_button("Download variant library CSV", vdf.to_csv(index=False), file_name="variant_library.csv", mime="text/csv")
-        if education_mode:
-            explain_table("variant_library", list(vdf.columns))
+        tables = variant_library_tables(model)
+        vdf = tables["variants"].copy()
+        vdf.insert(1, "meaning", "candidate child orientation from parent symmetry + OR + child symmetry")
+        st.dataframe(vdf.head(12).style.format({c: "{:.4f}" for c in vdf.columns if c.startswith("r")}), use_container_width=True)
+        st.caption("r00…r22 are the 3×3 rotation-matrix entries. They are used internally for angular comparisons; most users should focus on variant_id and fit error, not memorize matrix entries.")
+    st.subheader("Pairwise theoretical variant misorientation matrix")
+    st.caption("Cell (i,j) = angular separation between theoretical variants i and j after child-phase symmetry is considered. Repeated angles are expected because variants form symmetry families.")
+    st.dataframe(tables["misorientation_matrix_deg"].style.format("{:.1f}"), use_container_width=True)
 
-    st.subheader("Theoretical variant-pair misorientation")
-    st.dataframe(mdf, use_container_width=True)
-    if education_mode:
-        explain_table("misorientation_matrix", list(map(str, mdf.columns)))
-        st.markdown("**Why many values repeat:** symmetry collapses many different rotations into equivalent angles. That is normal for crystallographic variant families.")
-
-with workflow_tabs[3]:
-    st.header("EBSD/TKD data")
-    st.write("This is where the twin receives experimental orientation data. For now v0.3 supports CSV matrices/Euler angles and synthetic maps. Vendor .ctf/.ang/.h5 import remains a v0.4 target.")
-    data_mode = st.radio("Data source", ["Generate synthetic demo", "Upload EBSD/TKD CSV"], horizontal=True)
-
-    if data_mode == "Generate synthetic demo":
-        gc1, gc2, gc3, gc4 = st.columns(4)
-        h = gc1.number_input("Rows", value=50, min_value=5, max_value=200, step=5, help="Number of grid rows in the synthetic orientation map.")
-        w = gc2.number_input("Columns", value=70, min_value=5, max_value=250, step=5, help="Number of grid columns in the synthetic orientation map.")
-        n_parents = gc3.number_input("Parent regions", value=4, min_value=1, max_value=12, help="Number of synthetic parent grains/regions.")
-        noise = gc4.number_input("Orientation noise (°)", value=0.75, min_value=0.0, max_value=10.0, step=0.25, help="Random angular noise added to orientations to mimic measurement scatter.")
-        active_fraction = st.slider("Active variant fraction inside each parent region", 0.05, 1.0, 0.55, 0.05, help="Fraction of theoretical variants allowed to appear in each synthetic parent region.")
-        seed = st.number_input("Random seed", value=7, min_value=0, max_value=99999)
-        if st.button("Generate synthetic EBSD-like dataset", type="primary"):
-            synth = generate_synthetic_child_map(
+with TABS[4]:
+    st.header("Data workspace")
+    section_help(
+        "EBSD/TKD data",
+        "The real value starts when a measured orientation map is loaded. v0.4 supports CSV with either r00…r22 rotation-matrix columns or Bunge Euler angles phi1/Phi/phi2.",
+        "The orientation map feeds variant assignment, parent reconstruction, fit-error statistics and report export.",
+        "Direct .ctf/.ang/.h5 import is listed as a required v0.5 gap. Use vendor/MTEX/orix export to CSV for now.",
+    )
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("Generate synthetic test map")
+        if st.button("Generate synthetic EBSD-like map", type="primary"):
+            synthetic = generate_synthetic_child_map(
                 model.variants,
-                grid_shape=(int(h), int(w)),
-                n_parent_grains=int(n_parents),
-                active_variant_fraction=float(active_fraction),
-                orientation_noise_deg=float(noise),
-                seed=int(seed),
+                grid_shape=(grid_n, grid_n),
+                n_parent_grains=n_parents,
+                active_variant_fraction=active_fraction,
+                orientation_noise_deg=noise_deg,
+                seed=7,
             )
-            st.session_state.ebsd_df = synth.dataframe
-            st.session_state.child_oris = synth.child_orientations
-            st.session_state.synthetic_parents = synth.parent_orientations
-            st.session_state.assignment_result = None
-            st.session_state.recon_result = None
-            st.session_state.available_data["ebsd_or_tkd"] = True
-            st.success(f"Generated {len(synth.dataframe)} synthetic points.")
-    else:
-        st.info("CSV can contain x,y and either r00..r22 rotation-matrix columns or Bunge Euler columns phi1,Phi,phi2. Optional columns: point_id, phase, grain_id, ci, iq.")
-        uploaded = st.file_uploader("Upload EBSD/TKD CSV", type=["csv"])
+            st.session_state.ebsd_df = synthetic.dataframe
+            st.session_state.child_oris = synthetic.child_orientations
+            st.session_state.synthetic_parents = synthetic.parent_orientations
+            st.session_state.dataset_origin = "synthetic"
+            st.success(f"Generated {len(synthetic.dataframe)} synthetic points. This tests code only; it is not experimental evidence.")
+    with col_b:
+        st.subheader("Upload CSV orientation map")
+        uploaded = st.file_uploader("CSV with x,y and r00…r22 OR phi1,Phi,phi2", type=["csv"])
         if uploaded is not None:
             try:
                 df = read_ebsd_csv(uploaded)
                 st.session_state.ebsd_df = df
-                st.session_state.child_oris = list(df["orientation_matrix"])
+                st.session_state.child_oris = dataframe_to_orientation_matrices(df)
                 st.session_state.synthetic_parents = None
-                st.session_state.assignment_result = None
-                st.session_state.recon_result = None
-                st.session_state.available_data["ebsd_or_tkd"] = True
+                st.session_state.dataset_origin = "uploaded_csv"
                 st.success(f"Loaded {len(df)} orientation points.")
             except Exception as exc:
                 st.error(f"Could not read CSV: {exc}")
-
-    if st.session_state.ebsd_df is None:
-        st.warning("No dataset loaded yet. Generate a synthetic demo or upload a CSV.")
-    else:
+    if has_dataset:
         df = st.session_state.ebsd_df
-        preview = df.drop(columns=["orientation_matrix"], errors="ignore")
         st.subheader("Dataset preview")
-        st.dataframe(preview.head(300), use_container_width=True)
-        if education_mode:
-            explain_table("dataset_preview", list(preview.columns))
-        st.download_button("Download current dataset CSV", preview.to_csv(index=False), "current_ebsd_dataset.csv", "text/csv")
-        if {"x", "y", "true_variant_id"}.issubset(df.columns):
-            st.subheader("Synthetic ground-truth variant map")
-            fig = plot_variant_map(df.rename(columns={"true_variant_id": "variant_id"}), value_col="variant_id", title="Synthetic ground-truth variant ID at each point")
-            st.pyplot(fig)
-            st.caption("This map exists only for synthetic data. Real EBSD/TKD does not come with a true_variant_id; the twin must infer variant_id from the measured orientation.")
-
-with workflow_tabs[4]:
-    st.header("Variant assignment and parent reconstruction")
-    st.write("This is the first real analysis step: compare every measured/synthetic orientation with the theoretical variant library.")
-    if st.session_state.child_oris is None:
-        st.warning("Load or generate data in tab 3 first.")
+        st.dataframe(df.drop(columns=["orientation_matrix"], errors="ignore").head(50), use_container_width=True)
+        st.caption("Important columns: x,y are map coordinates; r00…r22 or phi1/Phi/phi2 define orientation; parent_region_id and true_variant_id appear only in synthetic validation data.")
+        df_download("Download current dataset CSV", df.drop(columns=["orientation_matrix"], errors="ignore"), "current_orientation_dataset.csv")
     else:
-        parent_mode = st.radio(
-            "Parent-orientation assumption",
-            ["Identity / unknown prototype", "Use first synthetic parent orientation", "Use synthetic parent-region orientations"],
-            horizontal=True,
-            help="For real data, identity is only a weak prototype. Publication-grade work needs OR fitting and graph-based parent reconstruction.",
-        )
-        parent_orientation = np.eye(3)
-        if parent_mode == "Use first synthetic parent orientation":
-            if st.session_state.synthetic_parents:
-                parent_orientation = st.session_state.synthetic_parents[0]
-                st.success("Using first synthetic parent orientation.")
-            else:
-                st.warning("No synthetic parent stored. Falling back to identity.")
+        st.info("No orientation dataset loaded yet. Generate a synthetic test map or upload a CSV.")
 
-        if st.button("Run variant assignment + prototype parent reconstruction", type="primary"):
-            if (
-                parent_mode == "Use synthetic parent-region orientations"
-                and st.session_state.synthetic_parents
-                and "parent_region_id" in st.session_state.ebsd_df.columns
-            ):
-                assignment = assign_variants_known_parent_regions(
-                    st.session_state.child_oris,
-                    st.session_state.synthetic_parents,
-                    st.session_state.ebsd_df["parent_region_id"].tolist(),
-                    model.variants,
-                    child_sym_ops=model.child_sym_ops,
-                    tolerance_deg=model.config.angular_tolerance_deg,
-                )
-                _, recon, _ = run_known_parent_analysis(model, st.session_state.child_oris, parent_orientation=np.eye(3), available_data={"ebsd_or_tkd": True})
-            else:
-                assignment, recon, _ = run_known_parent_analysis(model, st.session_state.child_oris, parent_orientation=parent_orientation, available_data={"ebsd_or_tkd": True})
-
-            result_df = st.session_state.ebsd_df.drop(columns=["orientation_matrix"], errors="ignore").copy()
-            result_df = result_df.drop(columns=["variant_id", "angular_error_deg", "fit_quality", "is_in_tolerance", "used_parent_region_id", "reconstructed_parent_cluster"], errors="ignore")
-            result_df = result_df.merge(assignment.assignments, on="point_id", how="left")
-            result_df["reconstructed_parent_cluster"] = recon.labels
-            st.session_state.ebsd_df = result_df
-            st.session_state.assignment_result = assignment
-            st.session_state.recon_result = recon
-            st.success("Analysis complete.")
-
-        assignment = st.session_state.assignment_result
-        recon = st.session_state.recon_result
-        if assignment is None:
-            st.info("Run the analysis to create variant maps, error metrics, and parent clusters.")
-        else:
+with TABS[5]:
+    st.header("Variant assignment and parent reconstruction")
+    section_help(
+        "variant assignment",
+        "Each measured child orientation is compared with every theoretical variant. The closest variant gets assigned and the angular error is reported.",
+        "Low angular error and high in-tolerance fraction support the chosen OR/model; high error suggests wrong OR, wrong convention, noisy data or wrong phase labels.",
+        "The parent reconstruction in v0.4 is exploratory. Full defensible reconstruction needs graph-based topology and OR-probability methods.",
+    )
+    if not has_dataset:
+        st.info("Load or generate data first.")
+    else:
+        run = st.button("Run variant + parent analysis", type="primary")
+        if run or st.session_state.assignment_result is not None:
+            if run:
+                if st.session_state.synthetic_parents is not None and "parent_region_id" in st.session_state.ebsd_df.columns:
+                    # known synthetic parent regions create more meaningful assignments
+                    from martwin.analysis.variant_analysis import assign_variants_known_parent_regions
+                    assignment = assign_variants_known_parent_regions(
+                        st.session_state.child_oris,
+                        st.session_state.synthetic_parents,
+                        st.session_state.ebsd_df["parent_region_id"],
+                        model.variants,
+                        model.child_sym_ops,
+                        tolerance_deg=tol,
+                    )
+                    _, recon, _ = run_known_parent_analysis(model, st.session_state.child_oris)
+                else:
+                    assignment, recon, _ = run_known_parent_analysis(model, st.session_state.child_oris)
+                st.session_state.assignment_result = assignment
+                st.session_state.recon_result = recon
+            assignment = st.session_state.assignment_result
+            recon = st.session_state.recon_result
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Mean angular error", f"{assignment.mean_error_deg:.2f}°")
             m2.metric("Max angular error", f"{assignment.max_error_deg:.2f}°")
-            m3.metric("Variant fit confidence", f"{assignment.confidence_score:.2f}")
-            m4.metric("Prototype parent clusters", len(set(recon.labels)) if recon else "—")
-            if education_mode:
-                st.markdown("- **Mean angular error**: average mismatch between measured/synthetic orientations and the nearest theoretical variant. Lower is better.")
-                st.markdown("- **Fit confidence**: simple normalized quality score. It is not a validated uncertainty model yet.")
-                st.markdown("- **Parent clusters**: prototype grouping of points that may share a parent orientation. v0.3 uses a simple method; graph-based reconstruction is next.")
-
+            m3.metric("In tolerance", f"{assignment.assignments['is_in_tolerance'].mean()*100:.1f}%")
+            m4.metric("Parent clusters", len(set(recon.labels)) if recon else 0)
             st.subheader("Variant population summary")
-            summary = assignment.summary.copy()
-            st.dataframe(summary, use_container_width=True)
-            if education_mode:
-                explain_table("variant_summary", list(summary.columns))
-
+            st.caption("count = number of map points assigned to a variant. fraction = count divided by all points. mean_error_deg = average angular mismatch for that variant. If one/few variants dominate, it may indicate texture, variant selection, synthetic setup, or biased sampling.")
+            st.dataframe(assignment.summary, hide_index=True, use_container_width=True)
             st.subheader("Point-level assignments")
-            point_df = st.session_state.ebsd_df.copy()
-            st.dataframe(point_df.head(500), use_container_width=True)
-            if education_mode:
-                explain_table("point_assignments", list(point_df.columns))
+            st.caption("point_id links back to the data map. angular_error_deg is the mismatch between measured orientation and closest theoretical variant. fit_quality is 1 at zero error and decreases toward 0 at the selected tolerance.")
+            st.dataframe(assignment.assignments.head(200), hide_index=True, use_container_width=True)
+            plot_df = st.session_state.ebsd_df.copy()
+            plot_df["variant_id"] = assignment.assignments["variant_id"].values
+            plot_df["angular_error_deg"] = assignment.assignments["angular_error_deg"].values
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Variant map")
+                st.caption("Each pixel/color is the closest theoretical martensite variant. This is where crystallography becomes spatial microstructure interpretation.")
+                st.pyplot(plot_variant_map(plot_df, value_col="variant_id", title="Assigned variant ID map"))
+            with c2:
+                st.subheader("Angular-error map")
+                st.caption("Bright/high-error areas are where the selected OR/model does not fit well. Use this to find bad data, wrong OR, convention errors, or real local distortions.")
+                st.pyplot(plot_variant_map(plot_df, value_col="angular_error_deg", title="Angular fit error (deg)"))
+            if recon:
+                plot_df["parent_cluster"] = recon.labels
+                st.subheader("Prototype parent-cluster map")
+                st.caption("This is not yet a publication-grade PAG/B2 reconstruction. It is a provisional clustering of candidate parent orientations used to show the intended workflow.")
+                st.pyplot(plot_variant_map(plot_df, value_col="parent_cluster", title="Prototype reconstructed parent clusters"))
 
-            if {"x", "y", "variant_id"}.issubset(st.session_state.ebsd_df.columns):
-                st.subheader("Assigned variant map")
-                fig = plot_variant_map(st.session_state.ebsd_df, value_col="variant_id", title="Assigned martensite variant at each EBSD/TKD point")
-                st.pyplot(fig)
-                st.caption("Each color/number is the nearest theoretical variant ID. Spatial regions of the same or related variants can indicate variant selection, packets, twins, or transformation accommodation. Validate with real EBSD quality and OR fitting before publication.")
-            if recon is not None and {"x", "y", "reconstructed_parent_cluster"}.issubset(st.session_state.ebsd_df.columns):
-                st.subheader("Prototype reconstructed parent-cluster map")
-                fig2 = plot_variant_map(st.session_state.ebsd_df, value_col="reconstructed_parent_cluster", title="Prototype parent-cluster labels")
-                st.pyplot(fig2)
-                st.caption("This is not yet final parent-grain reconstruction. It is a clustering prototype showing which points may share a parent orientation. v0.4 should replace this with graph-based PGR and OR refinement.")
-            st.download_button("Download assignments CSV", st.session_state.ebsd_df.to_csv(index=False), "variant_assignments.csv", "text/csv")
-            with st.expander("Algorithm notes and current limitations", expanded=education_mode):
-                st.write(recon.notes if recon else "No reconstruction notes available.")
-                st.warning("If a real dataset gives high angular error, possible causes include wrong OR, wrong phase symmetry, wrong Euler convention, wrong parent orientation, pseudosymmetry, poor EBSD indexing, or actual transformation physics not represented by the current model.")
-
-with workflow_tabs[5]:
+with TABS[6]:
     st.header("Transformation kinetics")
-    st.write("Kinetics converts thermal path into phase fraction. This is necessary for a real twin because variant crystallography alone does not say how much martensite forms.")
-    if not is_niti:
-        kc1, kc2, kc3 = st.columns(3)
-        Ms = kc1.number_input("Ms (°C)", value=350.0, step=10.0, help="Martensite start temperature. Needs alloy/process calibration.")
-        alpha = kc2.number_input("Koistinen–Marburger alpha", value=0.011, step=0.001, format="%.4f", help="Empirical rate parameter. Common first approximation, not universal.")
-        Tmin = kc3.number_input("Minimum temperature (°C)", value=20.0, step=10.0, help="Lowest temperature reached during cooling.")
-        temps = np.linspace(Ms + 100, Tmin, 180)
-        frac = km_curve(list(temps), Ms_C=Ms, alpha=alpha)
-        kdf = pd.DataFrame({"Temperature_C": temps, "martensite_fraction": frac})
-        st.session_state.last_kinetics_df = kdf
-        st.pyplot(make_steel_kinetics_plot(temps, frac))
-        st.dataframe(kdf.head(20), hide_index=True, use_container_width=True)
-        with st.expander("How to read this graph", expanded=education_mode):
-            st.markdown("**x-axis:** temperature during cooling. **y-axis:** predicted martensite fraction from 0 to 1.")
-            st.markdown("Above Ms, the model predicts no fresh martensite. Below Ms, martensite fraction increases according to the KM equation. This does not model bainite, carbon partitioning, tempering, retained austenite stabilization, or mechanical properties.")
-            st.dataframe(explain_columns(list(kdf.columns)), hide_index=True, use_container_width=True)
+    section_help(
+        "kinetics curve",
+        "Kinetics connects temperature/cooling/heating history to phase fraction. This is necessary for a true process-aware twin.",
+        "The graph is used to compare DSC/dilatometry/XRD phase-fraction data and to estimate phase fraction at a temperature.",
+        "v0.4 kinetics is educational unless you supply measured DSC/dilatometry data and fit parameters.",
+    )
+    if is_niti:
+        Ms = st.number_input("Ms: martensite start during cooling (°C)", value=30.0)
+        Mf = st.number_input("Mf: martensite finish during cooling (°C)", value=-10.0)
+        As = st.number_input("As: austenite start during heating (°C)", value=15.0)
+        Af = st.number_input("Af: austenite finish during heating (°C)", value=55.0)
+        tmin = min(Mf, As, Ms, Af) - 30
+        tmax = max(Mf, As, Ms, Af) + 30
+        temps = np.linspace(tmin, tmax, 220)
+        trans = NiTiTransformationTemperatures(Ms=Ms, Mf=Mf, As_=As, Af=Af)
+        cooling = [linear_cooling_fraction(float(T), trans) for T in temps]
+        heating = [linear_heating_fraction_austenite(float(T), trans) for T in temps]
+        kinetics_df = pd.DataFrame({"temperature_C": temps, "B19prime_fraction_cooling": cooling, "B2_fraction_heating": heating})
+        st.pyplot(make_niti_kinetics_plot(temps, cooling, heating, Ms, Mf, As, Af))
+        st.caption("Legend: B19′ fraction during cooling rises between Ms and Mf. B2 fraction during heating rises between As and Af. Real NiTi needs DSC-measured hysteresis, composition and precipitation state.")
     else:
-        nc1, nc2, nc3, nc4 = st.columns(4)
-        Ms = nc1.number_input("Ms (°C)", value=30.0, step=5.0, help="Martensite start during cooling.")
-        Mf = nc2.number_input("Mf (°C)", value=-10.0, step=5.0, help="Martensite finish during cooling.")
-        As = nc3.number_input("As (°C)", value=15.0, step=5.0, help="Austenite/B2 start during heating.")
-        Af = nc4.number_input("Af (°C)", value=55.0, step=5.0, help="Austenite/B2 finish during heating.")
-        temps = np.linspace(min(Mf, As) - 30, max(Ms, Af) + 30, 200)
-        tr = NiTiTransformationTemperatures(Ms_C=Ms, Mf_C=Mf, As_C=As, Af_C=Af)
-        cooling = [linear_cooling_fraction(float(T), tr) for T in temps]
-        heating = [linear_heating_fraction_austenite(float(T), tr) for T in temps]
-        kdf = pd.DataFrame({"Temperature_C": temps, "B19prime_fraction_cooling": cooling, "B2_fraction_heating": heating})
-        st.session_state.last_kinetics_df = kdf
-        st.pyplot(make_niti_kinetics_plot(temps, cooling, heating))
-        st.dataframe(kdf.head(20), hide_index=True, use_container_width=True)
-        with st.expander("How to read this graph", expanded=education_mode):
-            st.markdown("**Cooling curve:** B19′ martensite fraction becomes high between Ms and Mf. **Heating curve:** B2 austenite fraction becomes high between As and Af.")
-            st.markdown("This graph is a placeholder calibrated by user-entered transformation temperatures. A real NiTi twin needs DSC hysteresis, stress dependence, exact composition, ageing/precipitation state, and ideally in-situ diffraction or EBSD/TKD validation.")
-            st.dataframe(explain_columns(list(kdf.columns)), hide_index=True, use_container_width=True)
-    st.download_button("Download kinetics CSV", st.session_state.last_kinetics_df.to_csv(index=False) if st.session_state.last_kinetics_df is not None else "", "kinetics_curve.csv", "text/csv")
+        Ms = st.number_input("Ms: martensite start temperature (°C)", value=420.0)
+        alpha = st.number_input("KM alpha", value=0.011, min_value=0.0001, max_value=0.1, step=0.001, format="%.4f")
+        temps = np.linspace(Ms + 80, Ms - 300, 220)
+        frac = [km_curve(float(T), Ms=Ms, alpha=alpha) for T in temps]
+        kinetics_df = pd.DataFrame({"temperature_C": temps, "martensite_fraction": frac})
+        st.pyplot(make_steel_kinetics_plot(temps, frac, Ms, alpha))
+        st.caption("Legend: martensite fraction stays near zero above Ms and increases below Ms. Real steel work needs composition-dependent Ms, dilatometry/cooling curve and retained-austenite validation.")
+    st.session_state.last_kinetics_df = kinetics_df
+    st.dataframe(kinetics_df.head(40), use_container_width=True)
+    df_download("Download kinetics curve", kinetics_df, "kinetics_curve.csv")
 
-with workflow_tabs[6]:
-    st.header("Reliability, data gaps, and next experiments")
-    st.write("A serious digital twin must say what it does not know. Check only data you truly have; do not check boxes just to increase confidence.")
-    req = data_requirement_table("NiTi" if is_niti else "Steel", lpbf=lpbf)
-    keys = req["key"].tolist()
-    cols = st.columns(3)
-    available = {}
-    for i, key in enumerate(keys):
-        default = bool(base_available.get(key, False))
-        available[key] = cols[i % 3].checkbox(key, value=default, key=f"gap_{key}")
-    st.session_state.available_data.update(available)
-    gap_report = assess_data_gaps(material_key_for_gaps, st.session_state.available_data)
-    st.session_state.gap_report = gap_report
-    level, level_note = maturity_from_gap_score(gap_report.confidence_score, st.session_state.ebsd_df is not None, bool(available.get("DSC") or available.get("cooling_curve")), lpbf)
-    g1, g2 = st.columns([0.35, 0.65])
-    with g1:
-        st.metric("Twin maturity", level)
-        st.metric("Data confidence score", f"{gap_report.confidence_score:.2f}")
-        st.write(level_note)
-    with g2:
-        gap_df = req.copy()
-        gap_df["available"] = gap_df["key"].map(lambda k: bool(available.get(k, False)))
-        st.dataframe(gap_df, hide_index=True, use_container_width=True)
-    st.subheader("Missing data")
-    if gap_report.missing:
-        st.write(", ".join(gap_report.missing))
-    else:
-        st.success("No required data marked missing for the selected level. Still validate on an independent sample.")
-    st.subheader("Recommended next experiments/actions")
+with TABS[7]:
+    st.header("Open data and open tools to fill the gaps")
+    section_help(
+        "open data/tools",
+        "This table is the ingestion roadmap. It identifies public datasets/tools that can validate individual layers.",
+        "Use these datasets to turn the app from a demo into a benchmarked research tool.",
+        "Large datasets are not bundled in the repo; use the URLs/scripts and respect each dataset license.",
+    )
+    sources_df = dataframe(OPEN_SOURCE_DATASETS)
+    st.dataframe(sources_df, hide_index=True, use_container_width=True)
+    df_download("Download open-data manifest", sources_df, "open_data_manifest_v04.csv")
+    st.subheader("How these sources are used")
+    st.markdown(
+        "- **Steel first validation:** use Zenodo high-temperature EBSD/CTF + dilatometry to benchmark parent reconstruction.\n"
+        "- **NiTi first originality:** use Cayron's open article as crystallographic reference, but collect/upload raw NiTi EBSD/TKD/DSC to make it calibrated.\n"
+        "- **Python ecosystem:** use orix/kikuchipy for robust EBSD/orientation handling; pycalphad for thermodynamics; DAMASK/OpenPhase for future mechanics/phase-field coupling."
+    )
+
+with TABS[8]:
+    st.header("What is missing before we can defensibly call it the most comprehensive twin?")
+    st.markdown("This is the gap register. It prevents us from pretending the app is more mature than it is.")
+    gap_df = dataframe(DEFENSIBILITY_REQUIREMENTS)
+    st.dataframe(gap_df, hide_index=True, use_container_width=True)
+    st.subheader("Current missing data for this run")
+    missing_df = pd.DataFrame({"missing_item": gap_report.missing}) if gap_report.missing else pd.DataFrame({"missing_item": ["none from current checklist"]})
+    st.dataframe(missing_df, hide_index=True, use_container_width=True)
+    st.subheader("Recommended next experiments / data actions")
     for item in gap_report.recommended_next_experiments:
         st.write(f"- {item}")
+    st.error("For a defensible 'most comprehensive' claim, the next code milestone is graph-based parent reconstruction + real open steel dataset ingestion + raw NiTi dataset collection. The next data milestone is measured EBSD/TKD + DSC + XRD + mechanical data for the same sample.")
 
-with workflow_tabs[7]:
-    st.header("Open data and tool manifest")
-    st.write("These are the public data/tool sources currently registered in the project. They are not automatically downloaded by the app yet; they guide validation and future ingestion scripts.")
-    manifest_path = ROOT / "data" / "open_data_manifest" / "open_data_sources.csv"
-    if manifest_path.exists():
-        dfm = read_open_data_manifest(manifest_path)
-        c1, c2 = st.columns([0.35, 0.65])
-        with c1:
-            if "priority" in dfm.columns:
-                priority = st.multiselect("Filter by priority", sorted(dfm["priority"].dropna().unique()), default=list(sorted(dfm["priority"].dropna().unique())))
-            else:
-                priority = []
-            if priority and "priority" in dfm.columns:
-                dfm = dfm[dfm["priority"].isin(priority)]
-        st.dataframe(dfm, use_container_width=True)
-        if education_mode:
-            explain_table("open_manifest", list(dfm.columns))
-        st.download_button("Download manifest CSV", dfm.to_csv(index=False), "open_data_sources.csv", "text/csv")
-    else:
-        st.warning("Manifest not found.")
-
-with workflow_tabs[8]:
-    st.header("Export report")
+with TABS[9]:
+    st.header("Report/export")
     assignment = st.session_state.assignment_result
-    gap_report = st.session_state.gap_report
     metrics = {
-        "twin_version": "0.3",
-        "twin_maturity_level": level,
-        "material_key": model.material_key,
+        "maturity_level": level,
+        "confidence_score": gap_report.confidence_score,
+        "material_system": material_system,
         "orientation_relationship": model.orientation_relationship.name,
         "n_variants": len(model.variants),
-        "dataset_points": int(len(st.session_state.ebsd_df)) if st.session_state.ebsd_df is not None else 0,
-        "sample_id": sample_id,
-        "process_route": process_route,
+        "dataset_origin": st.session_state.dataset_origin,
+        "dataset_points": len(st.session_state.ebsd_df) if has_dataset else 0,
+        "variant_fit_tolerance_deg": tol,
+        "parent_reconstruction_threshold_deg": recon_thr,
         "lpbf": lpbf,
     }
     if assignment is not None:
         metrics.update({
             "mean_variant_error_deg": float(assignment.mean_error_deg),
             "max_variant_error_deg": float(assignment.max_error_deg),
-            "assignment_confidence": float(assignment.confidence_score),
+            "in_tolerance_fraction": float(assignment.assignments["is_in_tolerance"].mean()),
         })
-    if gap_report is not None:
-        metrics["data_confidence_score"] = float(gap_report.confidence_score)
-        metrics["missing_data"] = gap_report.missing
-    if st.session_state.last_kinetics_df is not None:
-        metrics["kinetics_points"] = int(len(st.session_state.last_kinetics_df))
-
-    md = build_markdown_report(model, assignment.summary if assignment else None, metrics, gap_report, notes=analyst_notes)
-    js = build_json_report(model, metrics, gap_report)
-    st.download_button("Download Markdown report", md, "martensite_twin_report.md", "text/markdown")
-    st.download_button("Download JSON report", js, "martensite_twin_report.json", "application/json")
-    st.markdown(md)
+    notes = "\n".join([f"Sample ID: {sample_id}", f"Process route: {process_route}", composition_note, heat_note, analyst_notes])
+    md = build_markdown_report(model, assignment.summary if assignment else None, metrics, gap_report, notes=notes)
+    md += "\n\n## Evidence table\n\n" + evidence_table(evidence).to_markdown(index=False)
+    md += "\n\n## Defensibility gap register\n\n" + gap_df.to_markdown(index=False)
+    st.text_area("Markdown report preview", value=md, height=500)
+    st.download_button("Download Markdown report", md.encode("utf-8"), "open_martensite_twin_v04_report.md", "text/markdown")
+    json_report = build_json_report(model, assignment.summary if assignment else None, metrics, gap_report, notes=notes)
+    json_report["state_vector"] = state
+    json_report["evidence"] = evidence_table(evidence).to_dict(orient="records")
+    json_report["defensibility_gaps"] = gap_df.to_dict(orient="records")
+    st.download_button("Download JSON report", json.dumps(json_report, indent=2).encode("utf-8"), "open_martensite_twin_v04_report.json", "application/json")

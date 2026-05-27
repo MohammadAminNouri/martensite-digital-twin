@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-martensite-twin"
-version = "0.3.0"
-description = "Python-first guided digital twin workflow for martensitic transformations"
+version = "0.4.0"
+description = "Evidence-aware guided digital twin workflow for martensitic transformations"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "OpenMartensiteTwin Project"}]
