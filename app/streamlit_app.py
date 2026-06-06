@@ -1,3 +1,16 @@
+from __future__ import annotations
+
+import json
+import inspect
+import sys
+import tempfile
+import pathlib
+from typing import Any
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import streamlit as st
 # Optional advanced modules
 EBSD_IO_AVAILABLE = False
 RECONSTRUCTION_AVAILABLE = False
@@ -26,19 +39,7 @@ All original twin-model, kinetics, evidence, reporting and XRD/EDS/SEM/TEM
 functionality is preserved and extended to consume EBSDData directly.
 """
 
-from __future__ import annotations
 
-import json
-import inspect
-import sys
-import tempfile
-import pathlib
-from typing import Any
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import streamlit as st
 
 # ── repo root on sys.path ──────────────────────────────────────────────────
 ROOT = pathlib.Path(__file__).resolve().parents[1]
