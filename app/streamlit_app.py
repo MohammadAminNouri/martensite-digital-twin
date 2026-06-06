@@ -1,3 +1,15 @@
+"""
+OpenMartensiteTwin  v0.6.0
+==========================
+Streamlit app — full rewrite integrating:
+  • martwin.io        : native .ctf / .ang EBSD readers  (EBSDData)
+  • martwin.reconstruction : graph-based parent reconstruction
+    (ParentReconstructor, OR_REGISTRY, GrainData, detect_OR, ORRefiner)
+
+All original twin-model, kinetics, evidence, reporting and XRD/EDS/SEM/TEM
+functionality is preserved and extended to consume EBSDData directly.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,35 +23,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-# Optional advanced modules
-EBSD_IO_AVAILABLE = False
-RECONSTRUCTION_AVAILABLE = False
-
-try:
-    from martwin.io import load as load_ebsd
-    from martwin.io import oxford_to_edax, edax_to_oxford
-    EBSD_IO_AVAILABLE = True
-except Exception as e:
-    EBSD_IO_ERROR = str(e)
-
-try:
-    from martwin.reconstruction.parent_reconstructor import ParentReconstructor
-    RECONSTRUCTION_AVAILABLE = True
-except Exception as e:
-    RECONSTRUCTION_ERROR = str(e)
-"""
-OpenMartensiteTwin  v0.6.0
-==========================
-Streamlit app — full rewrite integrating:
-  • martwin.io        : native .ctf / .ang EBSD readers  (EBSDData)
-  • martwin.reconstruction : graph-based parent reconstruction
-    (ParentReconstructor, OR_REGISTRY, GrainData, detect_OR, ORRefiner)
-
-All original twin-model, kinetics, evidence, reporting and XRD/EDS/SEM/TEM
-functionality is preserved and extended to consume EBSDData directly.
-"""
-
-
 
 # ── repo root on sys.path ──────────────────────────────────────────────────
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -78,19 +61,53 @@ from martwin.digital_twin.evidence import (
 )
 
 # ── NEW: native EBSD file readers ─────────────────────────────────────────
-from martwin.io import load_ctf, load_ang, load, oxford_to_edax, merge_ctf_ang
-from martwin.io.ebsd_data import EBSDData, Phase
+# Guarded import: the martwin.io subpackage is new in v0.6.
+# If the files have not been pushed yet, the app degrades gracefully —
+# Tabs 5 and 6 show an install notice instead of crashing.
+_IO_AVAILABLE = False
+_RECON_AVAILABLE = False
 
-# ── NEW: graph-based parent reconstruction ─────────────────────────────────
-from martwin.reconstruction import (
-    OR_REGISTRY,
-    get_OR,
-    GrainData,
-    ParentReconstructor,
-    ParentReconstructionResult,
-    ORRefiner,
-    detect_OR,
-)
+try:
+    # martwin/io/ shadows stdlib 'io'; use importlib to be explicit
+    import importlib as _importlib
+    _martwin_io = _importlib.import_module("martwin.io")
+    load_ctf        = _martwin_io.load_ctf
+    load_ang        = _martwin_io.load_ang
+    load            = _martwin_io.load
+    oxford_to_edax  = _martwin_io.oxford_to_edax
+    merge_ctf_ang   = _martwin_io.merge_ctf_ang
+
+    _ebsd_data_mod  = _importlib.import_module("martwin.io.ebsd_data")
+    EBSDData        = _ebsd_data_mod.EBSDData
+    Phase           = _ebsd_data_mod.Phase
+    _IO_AVAILABLE   = True
+except Exception as _io_err:
+    # Stub types so the rest of the module parses without NameError
+    EBSDData = object
+    Phase    = object
+    load_ctf = load_ang = load = oxford_to_edax = merge_ctf_ang = None
+    _io_err_msg = str(_io_err)
+
+try:
+    from martwin.reconstruction import (
+        OR_REGISTRY,
+        get_OR,
+        GrainData,
+        ParentReconstructor,
+        ParentReconstructionResult,
+        ORRefiner,
+        detect_OR,
+    )
+    _RECON_AVAILABLE = True
+except Exception as _recon_err:
+    OR_REGISTRY              = {}
+    get_OR                   = None
+    GrainData                = object
+    ParentReconstructor      = object
+    ParentReconstructionResult = object
+    ORRefiner                = object
+    detect_OR                = None
+    _recon_err_msg           = str(_recon_err)
 
 # ===========================================================================
 # Page config
@@ -950,6 +967,13 @@ with TABS[4]:
 # ---------------------------------------------------------------------------
 with TABS[5]:
     st.header("Native EBSD file reader  ✦ NEW in v0.6")
+    if not _IO_AVAILABLE:
+        st.error(
+            "**martwin.io not yet in this environment.** "
+            "Push martwin/io/__init__.py, ebsd_data.py, ctf_reader.py, ang_reader.py "
+            "to your repo root, then redeploy."
+        )
+        st.stop()
     section_help(
         ".ctf and .ang file readers",
         "martwin.io provides native Python parsers for Oxford Instruments .ctf (HKL Channel 5) "
@@ -1135,6 +1159,14 @@ with TABS[5]:
 # ---------------------------------------------------------------------------
 with TABS[6]:
     st.header("Graph-based parent phase reconstruction  ✦ NEW in v0.6")
+    if not _RECON_AVAILABLE:
+        st.error(
+            "**martwin.reconstruction not yet in this environment.** "
+            "Push martwin/reconstruction/__init__.py, grain_graph.py, "
+            "orientation_relationships.py, parent_reconstructor.py "
+            "to your repo, then redeploy."
+        )
+        st.stop()
     section_help(
         "variant graph + Markov clustering",
         "Implements the Hielscher–Nyyssönen–Niessen–Gazder (2022) variant graph algorithm. "
