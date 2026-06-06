@@ -1,3 +1,19 @@
+# Optional advanced modules
+EBSD_IO_AVAILABLE = False
+RECONSTRUCTION_AVAILABLE = False
+
+try:
+    from martwin.io import load as load_ebsd
+    from martwin.io import oxford_to_edax, edax_to_oxford
+    EBSD_IO_AVAILABLE = True
+except Exception as e:
+    EBSD_IO_ERROR = str(e)
+
+try:
+    from martwin.reconstruction.parent_reconstructor import ParentReconstructor
+    RECONSTRUCTION_AVAILABLE = True
+except Exception as e:
+    RECONSTRUCTION_ERROR = str(e)
 """
 OpenMartensiteTwin  v0.6.0
 ==========================
