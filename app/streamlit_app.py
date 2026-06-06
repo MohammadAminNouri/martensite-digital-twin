@@ -967,6 +967,8 @@ with TABS[4]:
 # ---------------------------------------------------------------------------
 with TABS[5]:
     st.header("Native EBSD file reader  ✦ NEW in v0.6")
+with TABS[5]:
+    st.header("Native EBSD file reader  ✦ NEW in v0.6")
     if not _IO_AVAILABLE:
         st.error(
             "**martwin.io not yet in this environment.** "
@@ -974,7 +976,8 @@ with TABS[5]:
             "to your repo root, then redeploy."
         )
         st.stop()
-    section_help(
+      
+  section_help(
         ".ctf and .ang file readers",
         "martwin.io provides native Python parsers for Oxford Instruments .ctf (HKL Channel 5) "
         "and EDAX/TSL .ang files. No MATLAB, orix or third-party format library required.",
@@ -1159,14 +1162,33 @@ with TABS[5]:
 # ---------------------------------------------------------------------------
 with TABS[6]:
     st.header("Graph-based parent phase reconstruction  ✦ NEW in v0.6")
+    with TABS[6]:
+    st.header("Graph-based parent phase reconstruction  ✦ NEW in v0.6")
+
     if not _RECON_AVAILABLE:
         st.error(
-            "**martwin.reconstruction not yet in this environment.** "
-            "Push martwin/reconstruction/__init__.py, grain_graph.py, "
-            "orientation_relationships.py, parent_reconstructor.py "
-            "to your repo, then redeploy."
+            "**martwin.reconstruction is not available in this environment.** "
+            "Check that martwin/reconstruction/__init__.py, grain_graph.py, "
+            "orientation_relationships.py, and parent_reconstructor.py exist in GitHub."
         )
-        st.stop()
+        with st.expander("Import error details"):
+            st.code(_recon_err_msg if "_recon_err_msg" in globals() else "No error message captured.")
+
+    elif not has_native_ebsd:
+        st.info(
+            "Load a .ctf or .ang file in **Tab 5** first. "
+            "After upload, the app will rerun and this tab will become active."
+        )
+
+    else:
+        section_help(
+            "variant graph + Markov clustering",
+            "Each indexed pixel is treated as a graph node for demo reconstruction.",
+            "Used to group child/martensite orientations into reconstructed parent grains.",
+            "For publication-grade work, segment grains first."
+        )
+
+        # keep your existing graph reconstruction code here
     section_help(
         "variant graph + Markov clustering",
         "Implements the Hielscher–Nyyssönen–Niessen–Gazder (2022) variant graph algorithm. "
