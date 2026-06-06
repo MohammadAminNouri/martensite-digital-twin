@@ -26,7 +26,8 @@ import streamlit as st
 
 # ── repo root on sys.path ──────────────────────────────────────────────────
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # ── original twin-model imports (unchanged) ────────────────────────────────
 from martwin.workflows.digital_twin import (
@@ -563,11 +564,15 @@ with st.sidebar:
 
     with st.expander("4. Graph reconstruction settings (NEW)", expanded=True):
         st.caption("Controls for the new graph-based parent phase reconstruction (martwin.reconstruction).")
+        or_options = ["auto-detect"] + list(OR_REGISTRY.keys()) if _RECON_AVAILABLE else ["module unavailable"]
         graph_or_choice = st.selectbox(
             "Orientation relationship for graph reconstruction",
-            ["auto-detect"] + list(OR_REGISTRY.keys()),
+            or_options,
             help="'auto-detect' tests KS, NW, Pitsch, GT and picks the best fit from the EBSD data.",
+            disabled=not _RECON_AVAILABLE,
         )
+        if not _RECON_AVAILABLE:
+            st.warning("Graph reconstruction module is unavailable. See Tab 6 for import details.")
         refine_or_flag = st.checkbox(
             "Refine OR from data before reconstruction",
             value=True,
@@ -967,248 +972,232 @@ with TABS[4]:
 # ---------------------------------------------------------------------------
 with TABS[5]:
     st.header("Native EBSD file reader  ✦ NEW in v0.6")
-with TABS[5]:
-    st.header("Native EBSD file reader  ✦ NEW in v0.6")
+
     if not _IO_AVAILABLE:
         st.error(
-            "**martwin.io not yet in this environment.** "
-            "Push martwin/io/__init__.py, ebsd_data.py, ctf_reader.py, ang_reader.py "
-            "to your repo root, then redeploy."
+            "**martwin.io is not available in this environment.** "
+            "Check that `martwin/io/__init__.py`, `ebsd_data.py`, `ctf_reader.py`, and `ang_reader.py` "
+            "exist in GitHub and that Streamlit has redeployed."
         )
-        st.stop()
-      
-  section_help(
-        ".ctf and .ang file readers",
-        "martwin.io provides native Python parsers for Oxford Instruments .ctf (HKL Channel 5) "
-        "and EDAX/TSL .ang files. No MATLAB, orix or third-party format library required.",
-        "The loaded EBSDData is used for variant assignment, graph-based parent reconstruction, "
-        "phase statistics, MAD/CI quality maps, and export.",
-        "Always check the indexed fraction, MAD distribution and phase proportions before running reconstruction.",
-    )
+        with st.expander("Import error details"):
+            st.code(_io_err_msg if "_io_err_msg" in globals() else "No error message captured.")
+    else:
+        section_help(
+            ".ctf and .ang file readers",
+            "martwin.io provides native Python parsers for Oxford Instruments .ctf (HKL Channel 5) "
+            "and EDAX/TSL .ang files. No MATLAB, orix or third-party format library required.",
+            "The loaded EBSDData is used for variant assignment, graph-based parent reconstruction, "
+            "phase statistics, MAD/CI quality maps, and export.",
+            "Always check the indexed fraction, MAD distribution and phase proportions before running reconstruction.",
+        )
 
-    upload_col, info_col = st.columns([1, 1])
+        upload_col, info_col = st.columns([1, 1])
 
-    with upload_col:
-        st.subheader("Upload .ctf file (Oxford HKL)")
-        ctf_upload = st.file_uploader("Upload .ctf", type=["ctf"], key="ctf_uploader")
-        if ctf_upload is not None:
-            with tempfile.NamedTemporaryFile(suffix=".ctf", delete=False) as tmp:
-                tmp.write(ctf_upload.read())
-                tmp_path = pathlib.Path(tmp.name)
-            try:
-                with st.spinner("Parsing .ctf file…"):
-                    ebsd = load_ctf(tmp_path, validate=True, max_mad_deg=float(max_mad_filter))
-                if ref_frame_convert:
-                    ebsd = oxford_to_edax(ebsd)
-                    st.info("Reference frame converted: Oxford → EDAX (180° about RD).")
-                st.session_state.ebsd_native = ebsd
-                st.session_state.ebsd_native_origin = "ctf"
-                st.session_state.dataset_origin = f"ctf:{ctf_upload.name}"
-                st.session_state.native_grain_data = None
-                st.session_state.graph_recon_result = None
-                st.success(
-                    f"Loaded {ebsd.n_pixels:,} pixels "
-                    f"({int(np.sum(ebsd.is_indexed)):,} indexed, "
-                    f"{100*float(np.sum(ebsd.is_indexed))/max(ebsd.n_pixels,1):.1f}%)."
-                )
-            except Exception as exc:
-                st.error(f"CTF parse error: {exc}")
-
-        st.subheader("Upload .ang file (EDAX/TSL)")
-        ang_upload = st.file_uploader("Upload .ang", type=["ang"], key="ang_uploader")
-        if ang_upload is not None:
-            with tempfile.NamedTemporaryFile(suffix=".ang", delete=False) as tmp:
-                tmp.write(ang_upload.read())
-                tmp_path = pathlib.Path(tmp.name)
-            try:
-                with st.spinner("Parsing .ang file…"):
-                    ebsd = load_ang(
-                        tmp_path, validate=True,
-                        min_ci=float(min_ci_filter),
-                        convert_hex_to_square=True,
+        with upload_col:
+            st.subheader("Upload .ctf file (Oxford HKL)")
+            ctf_upload = st.file_uploader("Upload .ctf", type=["ctf"], key="ctf_uploader")
+            if ctf_upload is not None:
+                with tempfile.NamedTemporaryFile(suffix=".ctf", delete=False) as tmp:
+                    tmp.write(ctf_upload.getvalue())
+                    tmp_path = pathlib.Path(tmp.name)
+                try:
+                    with st.spinner("Parsing .ctf file…"):
+                        ebsd = load_ctf(tmp_path, validate=True, max_mad_deg=float(max_mad_filter))
+                    if ref_frame_convert:
+                        ebsd = oxford_to_edax(ebsd)
+                        st.info("Reference frame converted: Oxford → EDAX (180° about RD).")
+                    st.session_state.ebsd_native = ebsd
+                    st.session_state.ebsd_native_origin = "ctf"
+                    st.session_state.dataset_origin = f"ctf:{ctf_upload.name}"
+                    st.session_state.native_grain_data = None
+                    st.session_state.graph_recon_result = None
+                    st.success(
+                        f"Loaded {ebsd.n_pixels:,} pixels "
+                        f"({int(np.sum(ebsd.is_indexed)):,} indexed, "
+                        f"{100*float(np.sum(ebsd.is_indexed))/max(ebsd.n_pixels,1):.1f}%)."
                     )
-                st.session_state.ebsd_native = ebsd
-                st.session_state.ebsd_native_origin = "ang"
-                st.session_state.dataset_origin = f"ang:{ang_upload.name}"
-                st.session_state.native_grain_data = None
-                st.session_state.graph_recon_result = None
-                st.success(
-                    f"Loaded {ebsd.n_pixels:,} pixels "
-                    f"({int(np.sum(ebsd.is_indexed)):,} indexed, "
-                    f"{100*float(np.sum(ebsd.is_indexed))/max(ebsd.n_pixels,1):.1f}%)."
-                )
-            except Exception as exc:
-                st.error(f"ANG parse error: {exc}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"CTF parse error: {exc}")
 
-    with info_col:
-        st.subheader("Format reference")
-        fmt_df = pd.DataFrame([
-            {
-                "format": ".ctf",
-                "vendor": "Oxford Instruments / HKL",
-                "angles": "Euler degrees → stored as radians",
-                "quality": "MAD, BC, BS, Bands, Error",
-                "grid": "square + hex",
-                "notes": "Multi-phase header; lattice params per phase",
-            },
-            {
-                "format": ".ang",
-                "vendor": "EDAX / TSL OIM",
-                "angles": "Euler radians (native)",
-                "quality": "IQ, CI, SEM signal, Fit",
-                "grid": "square + hex (auto-resampled)",
-                "notes": "Phase blocks with LatticeConstants; CI 0–1",
-            },
-        ])
-        st.dataframe(fmt_df, hide_index=True, use_container_width=True)
-        st.markdown(
-            "**Column mapping to EBSDData:**\n"
-            "- `euler1/2/3` — Bunge φ₁, Φ, φ₂ in **radians** (both formats)\n"
-            "- `mad` — MAD (CTF) or Fit quality (ANG), in degrees\n"
-            "- `bc` — Band contrast (CTF) or IQ (ANG)\n"
-            "- `bs` — Band slope (CTF) or CI 0–1 (ANG)\n"
-            "- `is_indexed` — True where phase_id > 0\n"
-            "- `as_rotation_matrices()` — (N,3,3) Bunge ZXZ passive"
-        )
+            st.subheader("Upload .ang file (EDAX/TSL)")
+            ang_upload = st.file_uploader("Upload .ang", type=["ang"], key="ang_uploader")
+            if ang_upload is not None:
+                with tempfile.NamedTemporaryFile(suffix=".ang", delete=False) as tmp:
+                    tmp.write(ang_upload.getvalue())
+                    tmp_path = pathlib.Path(tmp.name)
+                try:
+                    with st.spinner("Parsing .ang file…"):
+                        ebsd = load_ang(
+                            tmp_path,
+                            validate=True,
+                            min_ci=float(min_ci_filter),
+                            convert_hex_to_square=True,
+                        )
+                    st.session_state.ebsd_native = ebsd
+                    st.session_state.ebsd_native_origin = "ang"
+                    st.session_state.dataset_origin = f"ang:{ang_upload.name}"
+                    st.session_state.native_grain_data = None
+                    st.session_state.graph_recon_result = None
+                    st.success(
+                        f"Loaded {ebsd.n_pixels:,} pixels "
+                        f"({int(np.sum(ebsd.is_indexed)):,} indexed, "
+                        f"{100*float(np.sum(ebsd.is_indexed))/max(ebsd.n_pixels,1):.1f}%)."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"ANG parse error: {exc}")
 
-    # ---- Show loaded EBSDData ----
-    if st.session_state.ebsd_native is not None:
-        ebsd: EBSDData = st.session_state.ebsd_native
-        st.divider()
-        st.subheader(f"Loaded: {st.session_state.ebsd_native_origin.upper()}  —  {ebsd.source_file.split('/')[-1]}")
-
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("Total pixels", f"{ebsd.n_pixels:,}")
-        m2.metric("Indexed pixels", f"{int(np.sum(ebsd.is_indexed)):,}")
-        m3.metric("Indexed %", f"{100*float(np.sum(ebsd.is_indexed))/max(ebsd.n_pixels,1):.1f}%")
-        m4.metric("Grid", f"{ebsd.n_cols}×{ebsd.n_rows}")
-        m5.metric("Step (µm)", f"{ebsd.x_step:.3f}")
-        m6.metric("Grid type", ebsd.grid_type)
-
-        st.subheader("Per-phase statistics")
-        ph_df = ebsd_data_summary_df(ebsd)
-        st.dataframe(ph_df, hide_index=True, use_container_width=True)
-
-        st.subheader("Quality metric distributions (indexed pixels only)")
-        if int(np.sum(ebsd.is_indexed)) > 0:
-            q_col1, q_col2, q_col3 = st.columns(3)
-            with q_col1:
-                fig_mad, ax = plt.subplots(figsize=(4, 3))
-                indexed_mad = ebsd.mad[ebsd.is_indexed]
-                ax.hist(indexed_mad, bins=40, color="#3b82f6", edgecolor="none")
-                ax.set_xlabel("MAD / Fit quality (°)")
-                ax.set_ylabel("Count")
-                ax.set_title("MAD distribution")
-                ax.grid(True, alpha=0.2)
-                st.pyplot(fig_mad)
-            with q_col2:
-                fig_bc, ax = plt.subplots(figsize=(4, 3))
-                ax.hist(ebsd.bc[ebsd.is_indexed], bins=40, color="#10b981", edgecolor="none")
-                ax.set_xlabel("BC / IQ")
-                ax.set_ylabel("Count")
-                ax.set_title("Band contrast / IQ")
-                ax.grid(True, alpha=0.2)
-                st.pyplot(fig_bc)
-            with q_col3:
-                fig_bs, ax = plt.subplots(figsize=(4, 3))
-                ax.hist(ebsd.bs[ebsd.is_indexed], bins=40, color="#f59e0b", edgecolor="none")
-                ax.set_xlabel("BS / CI")
-                ax.set_ylabel("Count")
-                ax.set_title("Band slope / CI")
-                ax.grid(True, alpha=0.2)
-                st.pyplot(fig_bs)
-
-        st.subheader("Orientation quality map (BC / IQ)")
-        if ebsd.n_rows > 1 and ebsd.n_cols > 1:
-            fig_map, ax = plt.subplots(figsize=(8, 4))
-            bc_map = ebsd.map_array(ebsd.bc.astype(float))
-            im = ax.imshow(bc_map, origin="upper", cmap="gray", aspect="auto")
-            plt.colorbar(im, ax=ax, label="BC / IQ")
-            ax.set_title("Band contrast / IQ map")
-            ax.set_xlabel("x pixels")
-            ax.set_ylabel("y pixels")
-            st.pyplot(fig_map)
-        else:
-            st.caption("Map too small to display 2-D image.")
-
-        st.subheader("Phase ID map")
-        if ebsd.n_rows > 1 and ebsd.n_cols > 1:
-            fig_phase, ax = plt.subplots(figsize=(8, 4))
-            phase_map = ebsd.map_array(ebsd.phase_id.astype(float))
-            im = ax.imshow(phase_map, origin="upper", cmap="tab10", aspect="auto")
-            plt.colorbar(im, ax=ax, label="Phase ID")
-            ax.set_title("Phase ID map (0 = not indexed)")
-            ax.set_xlabel("x pixels")
-            ax.set_ylabel("y pixels")
-            st.pyplot(fig_phase)
-
-        st.subheader("Export EBSDData as CSV")
-        flat_df = ebsd_data_to_variant_csv_df(ebsd)
-        df_download("Download EBSDData CSV", flat_df, "ebsd_native_export.csv")
-        st.caption(
-            "Columns: x_um, y_um, phi1_deg, Phi_deg, phi2_deg (Bunge, converted from internal radians), "
-            "phase_id, mad_deg, bc, bs_ci, is_indexed, detector_intensity."
-        )
-
-        st.subheader("Header metadata")
-        if ebsd.header_raw:
-            hdr_df = pd.DataFrame(
-                [{"key": k, "value": v} for k, v in ebsd.header_raw.items()]
+        with info_col:
+            st.subheader("Format reference")
+            fmt_df = pd.DataFrame([
+                {
+                    "format": ".ctf",
+                    "vendor": "Oxford Instruments / HKL",
+                    "angles": "Euler degrees → stored as radians",
+                    "quality": "MAD, BC, BS, Bands, Error",
+                    "grid": "square + hex",
+                    "notes": "Multi-phase header; lattice params per phase",
+                },
+                {
+                    "format": ".ang",
+                    "vendor": "EDAX / TSL OIM",
+                    "angles": "Euler radians (native)",
+                    "quality": "IQ, CI, SEM signal, Fit",
+                    "grid": "square + hex (auto-resampled)",
+                    "notes": "Phase blocks with LatticeConstants; CI 0–1",
+                },
+            ])
+            st.dataframe(fmt_df, hide_index=True, use_container_width=True)
+            st.markdown(
+                "**Column mapping to EBSDData:**\n"
+                "- `euler1/2/3` — Bunge φ₁, Φ, φ₂ in **radians** (both formats)\n"
+                "- `mad` — MAD (CTF) or Fit quality (ANG), in degrees\n"
+                "- `bc` — Band contrast (CTF) or IQ (ANG)\n"
+                "- `bs` — Band slope (CTF) or CI 0–1 (ANG)\n"
+                "- `is_indexed` — True where phase_id > 0\n"
+                "- `as_rotation_matrices()` — (N,3,3) Bunge ZXZ passive"
             )
-            st.dataframe(hdr_df, hide_index=True, use_container_width=True)
+
+        if st.session_state.ebsd_native is not None:
+            ebsd: EBSDData = st.session_state.ebsd_native
+            st.divider()
+            source_name = str(getattr(ebsd, "source_file", "uploaded file")).split("/")[-1]
+            st.subheader(f"Loaded: {st.session_state.ebsd_native_origin.upper()}  —  {source_name}")
+
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            m1.metric("Total pixels", f"{ebsd.n_pixels:,}")
+            m2.metric("Indexed pixels", f"{int(np.sum(ebsd.is_indexed)):,}")
+            m3.metric("Indexed %", f"{100*float(np.sum(ebsd.is_indexed))/max(ebsd.n_pixels,1):.1f}%")
+            m4.metric("Grid", f"{ebsd.n_cols}×{ebsd.n_rows}")
+            m5.metric("Step (µm)", f"{ebsd.x_step:.3f}")
+            m6.metric("Grid type", ebsd.grid_type)
+
+            st.subheader("Per-phase statistics")
+            ph_df = ebsd_data_summary_df(ebsd)
+            st.dataframe(ph_df, hide_index=True, use_container_width=True)
+
+            st.subheader("Quality metric distributions (indexed pixels only)")
+            if int(np.sum(ebsd.is_indexed)) > 0:
+                q_col1, q_col2, q_col3 = st.columns(3)
+                with q_col1:
+                    fig_mad, ax = plt.subplots(figsize=(4, 3))
+                    indexed_mad = ebsd.mad[ebsd.is_indexed]
+                    ax.hist(indexed_mad, bins=40)
+                    ax.set_xlabel("MAD / Fit quality (°)")
+                    ax.set_ylabel("Count")
+                    ax.set_title("MAD distribution")
+                    ax.grid(True, alpha=0.2)
+                    st.pyplot(fig_mad)
+                with q_col2:
+                    fig_bc, ax = plt.subplots(figsize=(4, 3))
+                    ax.hist(ebsd.bc[ebsd.is_indexed], bins=40)
+                    ax.set_xlabel("BC / IQ")
+                    ax.set_ylabel("Count")
+                    ax.set_title("Band contrast / IQ")
+                    ax.grid(True, alpha=0.2)
+                    st.pyplot(fig_bc)
+                with q_col3:
+                    fig_bs, ax = plt.subplots(figsize=(4, 3))
+                    ax.hist(ebsd.bs[ebsd.is_indexed], bins=40)
+                    ax.set_xlabel("BS / CI")
+                    ax.set_ylabel("Count")
+                    ax.set_title("Band slope / CI")
+                    ax.grid(True, alpha=0.2)
+                    st.pyplot(fig_bs)
+
+            st.subheader("Orientation quality map (BC / IQ)")
+            if ebsd.n_rows > 1 and ebsd.n_cols > 1:
+                fig_map, ax = plt.subplots(figsize=(8, 4))
+                bc_map = ebsd.map_array(ebsd.bc.astype(float))
+                im = ax.imshow(bc_map, origin="upper", cmap="gray", aspect="auto")
+                plt.colorbar(im, ax=ax, label="BC / IQ")
+                ax.set_title("Band contrast / IQ map")
+                ax.set_xlabel("x pixels")
+                ax.set_ylabel("y pixels")
+                st.pyplot(fig_map)
+            else:
+                st.caption("Map too small to display 2-D image.")
+
+            st.subheader("Phase ID map")
+            if ebsd.n_rows > 1 and ebsd.n_cols > 1:
+                fig_phase, ax = plt.subplots(figsize=(8, 4))
+                phase_map = ebsd.map_array(ebsd.phase_id.astype(float))
+                im = ax.imshow(phase_map, origin="upper", cmap="tab10", aspect="auto")
+                plt.colorbar(im, ax=ax, label="Phase ID")
+                ax.set_title("Phase ID map (0 = not indexed)")
+                ax.set_xlabel("x pixels")
+                ax.set_ylabel("y pixels")
+                st.pyplot(fig_phase)
+
+            st.subheader("Export EBSDData as CSV")
+            flat_df = ebsd_data_to_variant_csv_df(ebsd)
+            df_download("Download EBSDData CSV", flat_df, "ebsd_native_export.csv")
+            st.caption(
+                "Columns: x_um, y_um, phi1_deg, Phi_deg, phi2_deg (Bunge, converted from internal radians), "
+                "phase_id, mad_deg, bc, bs_ci, is_indexed, detector_intensity."
+            )
+
+            st.subheader("Header metadata")
+            if getattr(ebsd, "header_raw", None):
+                hdr_df = pd.DataFrame([{"key": k, "value": v} for k, v in ebsd.header_raw.items()])
+                st.dataframe(hdr_df, hide_index=True, use_container_width=True)
+
 
 # ---------------------------------------------------------------------------
 # TAB 6 — Graph-based parent reconstruction  (NEW)
 # ---------------------------------------------------------------------------
 with TABS[6]:
     st.header("Graph-based parent phase reconstruction  ✦ NEW in v0.6")
-    with TABS[6]:
-    st.header("Graph-based parent phase reconstruction  ✦ NEW in v0.6")
 
     if not _RECON_AVAILABLE:
         st.error(
             "**martwin.reconstruction is not available in this environment.** "
-            "Check that martwin/reconstruction/__init__.py, grain_graph.py, "
-            "orientation_relationships.py, and parent_reconstructor.py exist in GitHub."
+            "Check that `martwin/reconstruction/__init__.py`, `grain_graph.py`, "
+            "`orientation_relationships.py`, and `parent_reconstructor.py` exist in GitHub."
         )
         with st.expander("Import error details"):
             st.code(_recon_err_msg if "_recon_err_msg" in globals() else "No error message captured.")
 
-    elif not has_native_ebsd:
+    elif st.session_state.ebsd_native is None:
         st.info(
             "Load a .ctf or .ang file in **Tab 5** first. "
-            "After upload, the app will rerun and this tab will become active."
+            "After upload, the app reruns and this tab becomes active."
         )
 
     else:
         section_help(
             "variant graph + Markov clustering",
-            "Each indexed pixel is treated as a graph node for demo reconstruction.",
-            "Used to group child/martensite orientations into reconstructed parent grains.",
-            "For publication-grade work, segment grains first."
+            "Implements the Hielscher–Nyyssönen–Niessen–Gazder (2022) variant graph algorithm. "
+            "Each (grain, variant) pair is a node. Edges carry the probability that two adjacent grains "
+            "share a common parent. Markov clustering groups nodes into parent grains.",
+            "The reconstructed parent orientation per cluster is the weighted quaternion mean of all "
+            "child orientations in that cluster.",
+            "v0.6 treats each indexed pixel as a grain. For publication-grade work, segment grains first "
+            "and use grain-mean orientations as nodes.",
         )
 
-        # keep your existing graph reconstruction code here
-    section_help(
-        "variant graph + Markov clustering",
-        "Implements the Hielscher–Nyyssönen–Niessen–Gazder (2022) variant graph algorithm. "
-        "Each (grain, variant) pair is a node. Edges carry the probability that two adjacent grains "
-        "share a common parent. Markov clustering groups nodes into parent grains.",
-        "The reconstructed parent orientation per cluster is the weighted quaternion mean of all "
-        "child orientations in that cluster (Markley 2007).",
-        "v0.6 treats each indexed pixel as a grain (pixel-level graph). "
-        "For publication-grade work, segment grains first and use grain-mean orientations as nodes.",
-    )
-
-    if not has_native_ebsd:
-        st.info(
-            "Load a .ctf or .ang file in **Tab 5** first. "
-            "The graph reconstruction uses EBSDData from the native readers."
-        )
-    else:
         ebsd: EBSDData = st.session_state.ebsd_native
-
-        # OR selection
         run_or_name = graph_or_choice if graph_or_choice != "auto-detect" else None
 
         st.subheader("Step 1 — Build grain graph from loaded EBSD data")
@@ -1230,7 +1219,6 @@ with TABS[6]:
                 st.session_state.native_grain_data = grain_data
                 n_grains = grain_data.n_grains
 
-                # Clamp: for very large maps run on a sub-sample to avoid timeout
                 MAX_GRAINS = 5000
                 if n_grains > MAX_GRAINS:
                     st.warning(
@@ -1241,10 +1229,10 @@ with TABS[6]:
                     rng = np.random.default_rng(42)
                     idx = rng.choice(n_grains, MAX_GRAINS, replace=False)
                     sub_orients = grain_data.orientations[idx]
-                    sub_adj = []
                     idx_set = set(idx.tolist())
                     old_to_new = {int(old): new for new, old in enumerate(idx)}
-                    for new, old in enumerate(idx):
+                    sub_adj = []
+                    for old in idx:
                         sub_adj.append([
                             old_to_new[nb] for nb in grain_data.adjacency[old]
                             if nb in idx_set
@@ -1254,7 +1242,6 @@ with TABS[6]:
                     grain_data = GrainData.from_arrays(sub_orients, sub_adj, sub_phase, sub_sizes)
                     n_grains = grain_data.n_grains
 
-                # Auto-detect OR if requested
                 actual_or_name = run_or_name
                 if actual_or_name is None:
                     with st.spinner("Auto-detecting best OR…"):
@@ -1282,7 +1269,6 @@ with TABS[6]:
                         st.error(f"Reconstruction failed: {exc}")
                         st.session_state.graph_recon_result = None
 
-        # ---- Display results ----
         result: ParentReconstructionResult | None = st.session_state.graph_recon_result
 
         if result is not None:
@@ -1298,31 +1284,28 @@ with TABS[6]:
 
             st.text(result.summary())
 
-            # Fit distribution
             fit_valid = result.fit[~np.isnan(result.fit)]
             if len(fit_valid) > 0:
                 fig_fit, ax = plt.subplots(figsize=(8, 3))
-                ax.hist(fit_valid, bins=60, color="#6366f1", edgecolor="none")
-                ax.axvline(float(np.mean(fit_valid)), color="red", linestyle="--", label=f"Mean {np.mean(fit_valid):.2f}°")
-                ax.set_xlabel("Fit (°) — misorientation between child-implied parent and cluster mean parent")
+                ax.hist(fit_valid, bins=60)
+                ax.axvline(float(np.mean(fit_valid)), linestyle="--", label=f"Mean {np.mean(fit_valid):.2f}°")
+                ax.set_xlabel("Fit (°) — child-implied parent vs cluster mean parent")
                 ax.set_ylabel("Count")
                 ax.set_title("Parent orientation fit distribution")
                 ax.legend()
                 ax.grid(True, alpha=0.2)
                 st.pyplot(fig_fit)
 
-            # Cluster size distribution
             _, cluster_sizes = np.unique(result.parent_grain_id[result.parent_grain_id >= 0], return_counts=True)
             if len(cluster_sizes) > 0:
                 fig_cs, ax = plt.subplots(figsize=(8, 3))
-                ax.hist(cluster_sizes, bins=min(40, len(cluster_sizes)), color="#10b981", edgecolor="none")
+                ax.hist(cluster_sizes, bins=min(40, len(cluster_sizes)))
                 ax.set_xlabel("Pixels per reconstructed parent grain")
                 ax.set_ylabel("Count")
                 ax.set_title("Reconstructed parent grain size distribution")
                 ax.grid(True, alpha=0.2)
                 st.pyplot(fig_cs)
 
-            # Variant assignment summary
             st.subheader("Variant assignment summary")
             vid_counts = pd.Series(result.variant_id[result.variant_id >= 0]).value_counts().sort_index()
             v_df = pd.DataFrame({
@@ -1332,7 +1315,6 @@ with TABS[6]:
             })
             st.dataframe(v_df, hide_index=True, use_container_width=True)
 
-            # Export
             export_df = pd.DataFrame({
                 "pixel_index": np.arange(len(result.parent_grain_id)),
                 "parent_grain_id": result.parent_grain_id,
